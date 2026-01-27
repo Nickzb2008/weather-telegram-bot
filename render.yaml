@@ -1,13 +1,13 @@
 services:
   - type: web
-    name: weather-telegram-bot
+    name: ukraine-weather-bot
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
+    startCommand: python app.py
     envVars:
       - key: TELEGRAM_TOKEN
         sync: false
-      - key: WEATHER_API_KEY
-        sync: false
+      - key: PORT
+        value: 10000
     autoDeploy: true
     healthCheckPath: /health

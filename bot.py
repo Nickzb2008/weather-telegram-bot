@@ -19,6 +19,13 @@ print("=" * 60)
 print("🇺🇦 UKRAINE WEATHER BOT WITH COMPLETE SETTLEMENTS DATABASE")
 print("=" * 60)
 
+# Додамо перевірку для веб-сервера
+if __name__ == '__main__':
+    print("=" * 60)
+    print("🇺🇦 UKRAINE WEATHER BOT WITH COMPLETE SETTLEMENTS DATABASE")
+    print("=" * 60)
+
+
 # Перевірка змінних середовища
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 
