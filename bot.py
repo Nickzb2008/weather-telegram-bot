@@ -1,7 +1,6 @@
 import os
 import logging
 import sys
-import asyncio
 
 # Налаштування логування
 logging.basicConfig(
@@ -12,7 +11,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 print("=" * 60)
-print("🚀 SIMPLE WEATHER BOT STARTING")
+print("🚀 WEATHER BOT v21 STARTING")
 print("=" * 60)
 
 # Перевірка змінних середовища
@@ -31,111 +30,33 @@ print("=" * 60)
 # Імпорт бібліотек
 try:
     import requests
-    from telegram import Bot, Update
-    from telegram.ext import Application, CommandHandler, MessageHandler, filters
+    from telegram import Update
+    from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
     print("✅ Libraries imported successfully")
 except ImportError as e:
     print(f"❌ Import error: {e}")
     sys.exit(1)
 
-# Глобальні змінні
-bot_instance = None
+# ============================================================================
+# ФУНКЦІЇ ДЛЯ ПОГОДИ
+# ============================================================================
 
-async def start_command(update: Update, context):
-    """Обробка команди /start"""
-    user = update.effective_user
-    await update.message.reply_text(
-        f"👋 Привіт, {user.first_name}!\n\n"
-        f"Я простий бот погоди. Просто напиши мені назву міста.\n\n"
-        f"📋 Доступні міста:\n"
-        f"• Київ\n• Львів\n• Одеса\n• Харків\n• Дніпро\n• Полтава\n\n"
-        f"💡 Приклад: \"Київ\" або \"погода в Одесі\""
-    )
-
-async def help_command(update: Update, context):
-    """Обробка команди /help"""
-    await update.message.reply_text(
-        "ℹ️ Довідка:\n\n"
-        "Просто напишіть назву міста українською мовою.\n\n"
-        "Доступні команди:\n"
-        "/start - початок\n"
-        "/help - довідка\n"
-        "/weather [місто] - погода\n\n"
-        "Приклади:\n"
-        "• Київ\n"
-        "• Погода в Львові\n"
-        "• /weather Одеса"
-    )
-
-async def weather_command(update: Update, context):
-    """Обробка команди /weather"""
-    if context.args:
-        city = ' '.join(context.args)
-        await get_and_send_weather(update, city)
-    else:
-        await update.message.reply_text("ℹ️ Використання: /weather [місто]\nНаприклад: /weather Київ")
-
-async def handle_message(update: Update, context):
-    """Обробка текстових повідомлень"""
-    text = update.message.text.strip().lower()
-    logger.info(f"Повідомлення: {text}")
+def get_weather(city_name):
+    """Отримати погоду для міста"""
+    if not WEATHER_API_KEY:
+        return None
     
-    # Список міст
-    cities = ['київ', 'львів', 'одеса', 'харків', 'дніпро', 'полтава', 'запоріжжя']
+    # Мапінг міст
+    city_map = {
+        'київ': 'Kyiv', 'львів': 'Lviv', 'одеса': 'Odesa',
+        'харків': 'Kharkiv', 'дніпро': 'Dnipro', 'полтава': 'Poltava',
+        'запоріжжя': 'Zaporizhzhia', 'вінниця': 'Vinnytsia',
+        'чернігів': 'Chernihiv', 'черкаси': 'Cherkasy'
+    }
     
-    # Перевірка, чи є місто у тексті
-    for city in cities:
-        if city in text:
-            await get_and_send_weather(update, city)
-            return
+    city_en = city_map.get(city_name.lower(), city_name)
     
-    # Якщо не знайдено місто
-    await update.message.reply_text(
-        "🤔 Не знайшов місто у вашому запиті.\n\n"
-        "📝 Спробуйте так:\n"
-        "• Написати просто 'Київ'\n"
-        "• Використати /weather Львів\n"
-        "• Написати 'погода в Одесі'"
-    )
-
-async def get_and_send_weather(update: Update, city: str):
-    """Отримати та надіслати погоду"""
     try:
-        # Відправляємо повідомлення про завантаження
-        message = await update.message.reply_text(f"🔍 Шукаю погоду в {city.capitalize()}...")
-        
-        if not WEATHER_API_KEY:
-            await message.edit_text(f"🌤 {city.capitalize()}\n\n(Weather API ключ не налаштовано)")
-            return
-        
-        # Отримуємо погоду
-        weather_text = await fetch_weather(city)
-        
-        if weather_text:
-            await message.edit_text(weather_text, parse_mode='Markdown')
-        else:
-            await message.edit_text(f"❌ Не вдалося отримати погоду для {city.capitalize()}")
-            
-    except Exception as e:
-        logger.error(f"Помилка отримання погоди: {e}")
-        await update.message.reply_text("❌ Помилка при отриманні погоди")
-
-async def fetch_weather(city: str):
-    """Отримати погоду з OpenWeatherMap"""
-    try:
-        # Перетворюємо українські назви на англійські
-        city_map = {
-            'київ': 'Kyiv',
-            'львів': 'Lviv', 
-            'одеса': 'Odesa',
-            'харків': 'Kharkiv',
-            'дніпро': 'Dnipro',
-            'полтава': 'Poltava',
-            'запоріжжя': 'Zaporizhzhia'
-        }
-        
-        city_en = city_map.get(city, city)
-        
         url = "https://api.openweathermap.org/data/2.5/weather"
         params = {
             'q': city_en,
@@ -149,85 +70,229 @@ async def fetch_weather(city: str):
         if response.status_code == 200:
             data = response.json()
             
-            name = data.get('name', city.capitalize())
+            name = data.get('name', city_name.capitalize())
             temp = data['main']['temp']
             feels_like = data['main']['feels_like']
             humidity = data['main']['humidity']
             pressure = data['main']['pressure']
             description = data['weather'][0]['description'].capitalize()
             wind_speed = data['wind']['speed']
+            wind_deg = data['wind'].get('deg', 0)
+            
+            # Напрямок вітру
+            directions = ["Північний", "Північно-східний", "Східний", "Південно-східний",
+                         "Південний", "Південно-західний", "Західний", "Північно-західний"]
+            wind_dir = directions[round(wind_deg / 45) % 8] if wind_deg else "Не визначено"
             
             return (
                 f"🌤 *Погода в {name}*\n\n"
                 f"📊 *Загальна інформація:*\n"
-                f"• Стан: {description}\n"
+                f"• Стан: *{description}*\n"
                 f"• Температура: *{temp:.1f}°C*\n"
                 f"• Відчувається як: *{feels_like:.1f}°C*\n\n"
                 f"💨 *Вітер:*\n"
-                f"• Швидкість: *{wind_speed} м/с*\n\n"
+                f"• Швидкість: *{wind_speed} м/с*\n"
+                f"• Напрямок: *{wind_dir}*\n\n"
                 f"📈 *Інші параметри:*\n"
                 f"• Вологість: *{humidity}%*\n"
                 f"• Тиск: *{pressure} hPa*\n\n"
                 f"🔄 Дані з OpenWeatherMap"
             )
         else:
-            logger.error(f"API помилка: {response.status_code}")
+            logger.error(f"API error: {response.status_code}")
             return None
             
     except Exception as e:
-        logger.error(f"Помилка API: {e}")
+        logger.error(f"Weather API error: {e}")
         return None
 
-async def error_handler(update: Update, context):
-    """Обробник помилок"""
-    logger.error(f"Помилка: {context.error}")
+# ============================================================================
+# ОБРОБНИКИ КОМАНД
+# ============================================================================
 
-async def main():
-    """Головна асинхронна функція"""
-    global bot_instance
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка команди /start"""
+    user = update.effective_user
+    logger.info(f"User {user.id} started bot")
     
-    print("🚀 Creating application...")
+    await update.message.reply_text(
+        f"👋 Вітаю, {user.first_name}!\n\n"
+        f"Я бот погоди. Напишіть мені назву міста.\n\n"
+        f"📋 *Доступні команди:*\n"
+        f"/start - початок\n"
+        f"/help - довідка\n"
+        f"/weather [місто] - погода\n\n"
+        f"💡 *Приклади:*\n"
+        f"• Київ\n"
+        f"• погода в Одесі\n"
+        f"• /weather Львів",
+        parse_mode='Markdown'
+    )
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка команди /help"""
+    await update.message.reply_text(
+        "ℹ️ *Довідка по боту*\n\n"
+        "*Як користуватися:*\n"
+        "1. Напишіть назву міста\n"
+        "2. Використайте команду /weather\n"
+        "3. Запитайте про погоду\n\n"
+        "*Приклади запитів:*\n"
+        "• Київ\n"
+        "• Яка погода у Львові?\n"
+        "• Погода Одеса\n"
+        "• /weather Харків\n\n"
+        "*Доступні міста:*\n"
+        "Київ, Львів, Одеса, Харків, Дніпро, Полтава, Запоріжжя, Вінниця",
+        parse_mode='Markdown'
+    )
+
+async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка команди /weather"""
+    if not context.args:
+        await update.message.reply_text(
+            "ℹ️ *Використання:* /weather [назва міста]\n\n"
+            "*Приклади:*\n"
+            "/weather Київ\n"
+            "/weather Львів\n"
+            "/weather Одеса",
+            parse_mode='Markdown'
+        )
+        return
     
+    city = ' '.join(context.args)
+    await process_weather_request(update, city, is_command=True)
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка текстових повідомлень"""
+    text = update.message.text.strip().lower()
+    logger.info(f"Message received: {text}")
+    
+    # Список міст для пошуку
+    cities = ['київ', 'львів', 'одеса', 'харків', 'дніпро', 
+              'полтава', 'запоріжжя', 'вінниця']
+    
+    # Ключові слова для погоди
+    weather_keywords = ['погода', 'weather', 'температура', 'вітер']
+    
+    # Пошук міста
+    found_city = None
+    for city in cities:
+        if city in text:
+            found_city = city
+            break
+    
+    # Якщо є ключові слова про погоду, спробуємо знайти місто
+    if not found_city:
+        for keyword in weather_keywords:
+            if keyword in text:
+                # Спрощений пошук міста після ключового слова
+                parts = text.split(keyword)
+                if len(parts) > 1:
+                    potential_city = parts[1].strip()
+                    # Видаляємо зайві слова
+                    for word in ['в', 'у', 'на', 'for', 'in', 'at']:
+                        potential_city = potential_city.replace(word, '').strip()
+                    
+                    if potential_city:
+                        found_city = potential_city
+                        break
+    
+    if found_city:
+        await process_weather_request(update, found_city)
+    else:
+        # Якщо короткий текст, спробуємо як назву міста
+        if len(text) < 20 and not any(keyword in text for keyword in weather_keywords):
+            await process_weather_request(update, text)
+        else:
+            await update.message.reply_text(
+                "🤔 *Не розпізнано запит.*\n\n"
+                "📝 *Спробуйте так:*\n"
+                "• Напишіть назву міста\n"
+                "• Використайте /weather [місто]\n"
+                "• Запитайте 'погода в [місті]'\n\n"
+                "❓ *Довідка:* /help",
+                parse_mode='Markdown'
+            )
+
+async def process_weather_request(update: Update, city: str, is_command=False):
+    """Обробка запиту про погоду"""
     try:
-        # Створюємо Application
-        application = Application.builder().token(TELEGRAM_TOKEN).build()
-        bot_instance = application.bot
+        # Відправляємо повідомлення про завантаження
+        if is_command:
+            message = await update.message.reply_text(f"🔍 *Шукаю погоду в {city}...*", parse_mode='Markdown')
+        else:
+            message = await update.message.reply_text(f"🔍 *Аналізую погоду в {city}...*", parse_mode='Markdown')
         
-        # Додаємо обробників
+        # Отримуємо погоду
+        weather_text = get_weather(city)
+        
+        if weather_text:
+            await message.edit_text(weather_text, parse_mode='Markdown')
+            logger.info(f"Weather sent for {city}")
+        else:
+            await message.edit_text(
+                f"❌ *Не вдалося отримати погоду для '{city}'*\n\n"
+                f"*Можливі причини:*\n"
+                f"• Місто не знайдено\n"
+                f"• Проблеми з підключенням\n"
+                f"• Неправильне написання\n\n"
+                f"📋 *Спробуйте:*\n"
+                f"• Перевірити написання\n"
+                f"• Використати українську назву\n"
+                f"• Спробувати інше місто",
+                parse_mode='Markdown'
+            )
+            logger.warning(f"Weather not found for {city}")
+            
+    except Exception as e:
+        logger.error(f"Error processing weather request: {e}")
+        await update.message.reply_text(
+            "❌ *Виникла помилка.*\n\n"
+            "Будь ласка, спробуйте пізніше або зверніться до адміністратора.",
+            parse_mode='Markdown'
+        )
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробник помилок"""
+    logger.error(f"Bot error: {context.error}", exc_info=True)
+
+# ============================================================================
+# ГОЛОВНА ФУНКЦІЯ
+# ============================================================================
+
+def main():
+    """Запуск бота"""
+    try:
+        print("🚀 Creating application...")
+        
+        # Створення додатку з новим API
+        application = Application.builder().token(TELEGRAM_TOKEN).build()
+        
+        # Додавання обробників
         application.add_handler(CommandHandler("start", start_command))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("weather", weather_command))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
-        # Додаємо обробник помилок
+        # Обробник помилок
         application.add_error_handler(error_handler)
         
-        print("✅ Application created successfully")
+        print("✅ Application created")
         print("🚀 Starting bot polling...")
         
-        # Запускаємо полінг
-        await application.run_polling(
+        # Запуск бота
+        application.run_polling(
             drop_pending_updates=True,
             timeout=30,
             pool_timeout=30,
-            allowed_updates=["message", "callback_query"]
+            allowed_updates=Update.ALL_TYPES
         )
         
     except Exception as e:
-        print(f"❌ Error in main: {e}")
+        print(f"❌ Error: {e}")
+        logger.error(f"Application error: {e}")
         raise
 
-def run_bot():
-    """Запуск бота"""
-    try:
-        # Запускаємо асинхронну main функцію
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n👋 Bot stopped by user")
-    except Exception as e:
-        print(f"\n❌ Fatal error: {e}")
-        logger.error(f"Fatal error: {e}")
-        sys.exit(1)
-
 if __name__ == '__main__':
-    run_bot()
+    main()
