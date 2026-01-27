@@ -357,20 +357,32 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     
     if data.startswith('current_'):
-        index = int(data.split('_')[1]) - 1
-        if 'last_search_results' in context.user_data:
-            results = context.user_data['last_search_results']
-            if 0 <= index < len(results):
-                settlement = results[index]
-                await process_current_weather(query, settlement['name'], settlement['region'])
+        if data == 'current_city':
+            # Обробляємо випадок з улюблених міст
+            favorites = context.user_data.get('favorites', [])
+            if favorites:
+                await process_current_weather(query, favorites[0]['name'], favorites[0]['region'])
+        else:
+            index = int(data.split('_')[1]) - 1
+            if 'last_search_results' in context.user_data:
+                results = context.user_data['last_search_results']
+                if 0 <= index < len(results):
+                    settlement = results[index]
+                    await process_current_weather(query, settlement['name'], settlement['region'])
     
     elif data.startswith('forecast_'):
-        index = int(data.split('_')[1]) - 1
-        if 'last_search_results' in context.user_data:
-            results = context.user_data['last_search_results']
-            if 0 <= index < len(results):
-                settlement = results[index]
-                await process_3day_forecast(query, settlement['name'], settlement['region'])
+        if data == 'forecast_city':
+            # Обробляємо випадок з улюблених міст
+            favorites = context.user_data.get('favorites', [])
+            if favorites:
+                await process_3day_forecast(query, favorites[0]['name'], favorites[0]['region'])
+        else:
+            index = int(data.split('_')[1]) - 1
+            if 'last_search_results' in context.user_data:
+                results = context.user_data['last_search_results']
+                if 0 <= index < len(results):
+                    settlement = results[index]
+                    await process_3day_forecast(query, settlement['name'], settlement['region'])
     
     elif data.startswith('city_'):
         index = int(data.split('_')[1]) - 1
@@ -380,24 +392,26 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 settlement = results[index]
                 await process_current_weather(query, settlement['name'], settlement['region'])
     
-    elif data.startswith('add_fav_'):
-        parts = data.split('_')
-        if len(parts) >= 3:
-            city_index = int(parts[2]) - 1
-            if 'last_search_results' in context.user_data:
-                results = context.user_data['last_search_results']
-                if 0 <= city_index < len(results):
-                    settlement = results[city_index]
-                    await add_to_favorites(query, context, settlement['name'], settlement['region'])
+    elif data == 'add_fav':
+        # Отримуємо останнє місто з контексту
+        if 'last_city' in context.user_data and 'last_region' in context.user_data:
+            settlement_name = context.user_data['last_city']
+            region = context.user_data['last_region']
+            await add_to_favorites(query, context, settlement_name, region)
+        else:
+            await query.answer("❌ Не вдалося додати до улюблених. Спочатку знайдіть місто.")
     
     elif data.startswith('remove_fav_'):
         parts = data.split('_')
         if len(parts) >= 3:
-            fav_index = int(parts[2]) - 1
-            favorites = context.user_data.get('favorites', [])
-            if 0 <= fav_index < len(favorites):
-                fav = favorites[fav_index]
-                await remove_from_favorites(query, context, fav['name'], fav['region'])
+            try:
+                fav_index = int(parts[2]) - 1
+                favorites = context.user_data.get('favorites', [])
+                if 0 <= fav_index < len(favorites):
+                    fav = favorites[fav_index]
+                    await remove_from_favorites(query, context, fav['name'], fav['region'])
+            except ValueError:
+                await query.answer("❌ Помилка при видаленні з улюблених")
     
     elif data == 'clear_favorites':
         await clear_favorites(query, context)
@@ -408,6 +422,28 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if 0 <= index < len(centers):
             center = centers[index]
             await process_current_weather(query, center['name'], center['region'])
+    
+    elif data == 'back_to_menu':
+        await start_command(update, context)
+    
+    elif data == 'new_search':
+        await query.edit_message_text(
+            "🔍 *Введіть назву населеного пункту для пошуку:*",
+            parse_mode='Markdown'
+        )
+        context.user_data['awaiting_city_for'] = 'search'
+    
+    elif data == 'refresh':
+        # Оновлення погоди для останнього переглянутого міста
+        if 'last_city' in context.user_data:
+            city = context.user_data['last_city']
+            region = context.user_data.get('last_region', '')
+            await process_current_weather(query, city, region)
+        else:
+            await query.answer("❌ Немає даних для оновлення")
+    
+    else:
+        await query.answer("❌ Дія не розпізнана")
 
 # ============================================================================
 # ОБЛАСНІ ЦЕНТРИ
