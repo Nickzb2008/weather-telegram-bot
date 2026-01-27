@@ -65,7 +65,7 @@ def get_main_keyboard():
         [KeyboardButton("🏙 Обласні центри")],
         [KeyboardButton("⭐️ Улюблені міста")],
         [KeyboardButton("📊 Статистика"), KeyboardButton("❓ Допомога")]
-    ], resize_keyboard=True, is_persistent=True)  # Зміна тут
+    ], resize_keyboard=True)
 
 def get_back_keyboard():
     """Отримати клавіатуру з кнопкою Назад"""
@@ -294,10 +294,15 @@ async def handle_quick_search(update: Update, query: str, context: ContextTypes.
     context.user_data['last_search_results'] = settlements
     context.user_data['last_search_query'] = query
     
-    keyboard = [
-        [InlineKeyboardButton(f"{i}. {s['name']}", callback_data=f"city_{i}")]
-        for i, s in enumerate(settlements[:5], 1)
-    ]
+    # Створюємо інлайн-кнопки
+    keyboard = []
+    for i, settlement in enumerate(settlements[:5], 1):
+        button_text = f"{i}. {settlement['name']}"
+        if len(button_text) > 20:  # Обмеження Telegram
+            button_text = f"{i}. {settlement['name'][:17]}..."
+        
+        callback_data = f"city_{i}"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -321,6 +326,10 @@ async def show_search_results(update: Update, settlements: List[dict], action: s
     # Створюємо кнопки
     keyboard = []
     for i, settlement in enumerate(settlements[:5], 1):
+        button_text = f"{i}. {settlement['name']}"
+        if len(button_text) > 20:
+            button_text = f"{i}. {settlement['name'][:17]}..."
+        
         if action == 'current':
             callback_data = f"current_{i}"
         elif action == 'forecast':
@@ -328,10 +337,7 @@ async def show_search_results(update: Update, settlements: List[dict], action: s
         else:
             callback_data = f"city_{i}"
         
-        keyboard.append([InlineKeyboardButton(
-            f"{i}. {settlement['name']}",
-            callback_data=callback_data
-        )])
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -356,76 +362,105 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     data = query.data
     
+    # Спрощена обробка для current_
     if data.startswith('current_'):
-        if data == 'current_city':
-            # Обробляємо випадок з улюблених міст
-            favorites = context.user_data.get('favorites', [])
-            if favorites:
-                await process_current_weather(query, favorites[0]['name'], favorites[0]['region'])
-        else:
+        try:
+            if data == 'current_city':
+                # Обробляємо випадок з улюблених міст
+                favorites = context.user_data.get('favorites', [])
+                if favorites:
+                    await process_current_weather(query, favorites[0]['name'], favorites[0]['region'])
+            else:
+                index = int(data.split('_')[1]) - 1
+                if 'last_search_results' in context.user_data:
+                    results = context.user_data['last_search_results']
+                    if 0 <= index < len(results):
+                        settlement = results[index]
+                        await process_current_weather(query, settlement['name'], settlement['region'])
+        except (ValueError, IndexError) as e:
+            logger.error(f"Error processing current button: {e}")
+            await query.answer("❌ Помилка обробки запиту")
+    
+    # Спрощена обробка для forecast_
+    elif data.startswith('forecast_'):
+        try:
+            if data == 'forecast_city':
+                # Обробляємо випадок з улюблених міст
+                favorites = context.user_data.get('favorites', [])
+                if favorites:
+                    await process_3day_forecast(query, favorites[0]['name'], favorites[0]['region'])
+            else:
+                index = int(data.split('_')[1]) - 1
+                if 'last_search_results' in context.user_data:
+                    results = context.user_data['last_search_results']
+                    if 0 <= index < len(results):
+                        settlement = results[index]
+                        await process_3day_forecast(query, settlement['name'], settlement['region'])
+        except (ValueError, IndexError) as e:
+            logger.error(f"Error processing forecast button: {e}")
+            await query.answer("❌ Помилка обробки запиту")
+    
+    # Обробка для city_
+    elif data.startswith('city_'):
+        try:
             index = int(data.split('_')[1]) - 1
             if 'last_search_results' in context.user_data:
                 results = context.user_data['last_search_results']
                 if 0 <= index < len(results):
                     settlement = results[index]
                     await process_current_weather(query, settlement['name'], settlement['region'])
+        except (ValueError, IndexError) as e:
+            logger.error(f"Error processing city button: {e}")
+            await query.answer("❌ Помилка обробки запиту")
     
-    elif data.startswith('forecast_'):
-        if data == 'forecast_city':
-            # Обробляємо випадок з улюблених міст
-            favorites = context.user_data.get('favorites', [])
-            if favorites:
-                await process_3day_forecast(query, favorites[0]['name'], favorites[0]['region'])
-        else:
-            index = int(data.split('_')[1]) - 1
-            if 'last_search_results' in context.user_data:
-                results = context.user_data['last_search_results']
-                if 0 <= index < len(results):
-                    settlement = results[index]
-                    await process_3day_forecast(query, settlement['name'], settlement['region'])
-    
-    elif data.startswith('city_'):
-        index = int(data.split('_')[1]) - 1
-        if 'last_search_results' in context.user_data:
-            results = context.user_data['last_search_results']
-            if 0 <= index < len(results):
-                settlement = results[index]
-                await process_current_weather(query, settlement['name'], settlement['region'])
-    
+    # Додавання до улюблених
     elif data == 'add_fav':
-        # Отримуємо останнє місто з контексту
-        if 'last_city' in context.user_data and 'last_region' in context.user_data:
-            settlement_name = context.user_data['last_city']
-            region = context.user_data['last_region']
-            await add_to_favorites(query, context, settlement_name, region)
-        else:
-            await query.answer("❌ Не вдалося додати до улюблених. Спочатку знайдіть місто.")
+        try:
+            # Отримуємо останнє місто з контексту
+            if 'last_city' in context.user_data and 'last_region' in context.user_data:
+                settlement_name = context.user_data['last_city']
+                region = context.user_data['last_region']
+                await add_to_favorites(query, context, settlement_name, region)
+            else:
+                await query.answer("❌ Не вдалося додати до улюблених. Спочатку знайдіть місто.")
+        except Exception as e:
+            logger.error(f"Error adding to favorites: {e}")
+            await query.answer("❌ Помилка додавання до улюблених")
     
+    # Видалення з улюблених
     elif data.startswith('remove_fav_'):
-        parts = data.split('_')
-        if len(parts) >= 3:
-            try:
-                fav_index = int(parts[2]) - 1
-                favorites = context.user_data.get('favorites', [])
-                if 0 <= fav_index < len(favorites):
-                    fav = favorites[fav_index]
-                    await remove_from_favorites(query, context, fav['name'], fav['region'])
-            except ValueError:
-                await query.answer("❌ Помилка при видаленні з улюблених")
+        try:
+            parts = data.split('_')
+            fav_index = int(parts[2]) - 1
+            favorites = context.user_data.get('favorites', [])
+            if 0 <= fav_index < len(favorites):
+                fav = favorites[fav_index]
+                await remove_from_favorites(query, context, fav['name'], fav['region'])
+        except (ValueError, IndexError) as e:
+            logger.error(f"Error removing from favorites: {e}")
+            await query.answer("❌ Помилка при видаленні з улюблених")
     
+    # Очищення улюблених
     elif data == 'clear_favorites':
         await clear_favorites(query, context)
     
+    # Обласні центри
     elif data.startswith('region_'):
-        index = int(data.split('_')[1]) - 1
-        centers = settlements_db.get_regional_centers()
-        if 0 <= index < len(centers):
-            center = centers[index]
-            await process_current_weather(query, center['name'], center['region'])
+        try:
+            index = int(data.split('_')[1]) - 1
+            centers = settlements_db.get_regional_centers()
+            if 0 <= index < len(centers):
+                center = centers[index]
+                await process_current_weather(query, center['name'], center['region'])
+        except (ValueError, IndexError) as e:
+            logger.error(f"Error processing region button: {e}")
+            await query.answer("❌ Помилка обробки запиту")
     
+    # Назад до меню
     elif data == 'back_to_menu':
         await start_command(update, context)
     
+    # Новий пошук
     elif data == 'new_search':
         await query.edit_message_text(
             "🔍 *Введіть назву населеного пункту для пошуку:*",
@@ -433,16 +468,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         context.user_data['awaiting_city_for'] = 'search'
     
+    # Оновлення погоди
     elif data == 'refresh':
-        # Оновлення погоди для останнього переглянутого міста
-        if 'last_city' in context.user_data:
-            city = context.user_data['last_city']
-            region = context.user_data.get('last_region', '')
-            await process_current_weather(query, city, region)
-        else:
-            await query.answer("❌ Немає даних для оновлення")
+        try:
+            if 'last_city' in context.user_data:
+                city = context.user_data['last_city']
+                region = context.user_data.get('last_region', '')
+                await process_current_weather(query, city, region)
+            else:
+                await query.answer("❌ Немає даних для оновлення")
+        except Exception as e:
+            logger.error(f"Error refreshing weather: {e}")
+            await query.answer("❌ Помилка оновлення погоди")
     
     else:
+        logger.warning(f"Unrecognized callback data: {data}")
         await query.answer("❌ Дія не розпізнана")
 
 # ============================================================================
@@ -459,17 +499,12 @@ async def show_regional_centers(update: Update, context: ContextTypes.DEFAULT_TY
     
     # Створюємо кнопки
     keyboard = []
-    row = []
     for i, center in enumerate(centers, 1):
         button_text = f"{i}. {center['name']}"
         if len(button_text) > 20:
             button_text = f"{i}. {center['name'][:17]}..."
         
-        row.append(InlineKeyboardButton(button_text, callback_data=f"region_{i}"))
-        
-        if len(row) == 2 or i == len(centers):
-            keyboard.append(row)
-            row = []
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"region_{i}")])
     
     keyboard.append([InlineKeyboardButton("↩️ Назад", callback_data="back_to_menu")])
     
@@ -521,10 +556,11 @@ async def show_favorites(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Створюємо кнопки
     keyboard = []
     for i, fav in enumerate(favorites, 1):
-        keyboard.append([
+        row = [
             InlineKeyboardButton(f"🌤 {fav['name']}", callback_data=f"current_{i}"),
             InlineKeyboardButton("🗑", callback_data=f"remove_fav_{i}")
-        ])
+        ]
+        keyboard.append(row)
     
     keyboard.append([InlineKeyboardButton("🗑 Очистити улюблені", callback_data="clear_favorites")])
     keyboard.append([InlineKeyboardButton("↩️ Назад", callback_data="back_to_menu")])
@@ -566,6 +602,10 @@ async def add_to_favorites(update, context, settlement_name, region):
     })
     context.user_data['favorites'] = favorites
     
+    # Зберігаємо останнє місто для кнопки "Додати до улюблених"
+    context.user_data['last_city'] = settlement_name
+    context.user_data['last_region'] = region
+    
     if hasattr(update, 'answer'):
         await update.answer(f"✅ {settlement_name} додано до улюблених!")
     
@@ -578,14 +618,20 @@ async def remove_from_favorites(update, context, settlement_name, region):
     
     # Шукаємо та видаляємо місто
     new_favorites = []
+    removed = False
     for fav in favorites:
         if not (fav['name'] == settlement_name and fav['region'] == region):
             new_favorites.append(fav)
+        else:
+            removed = True
     
     context.user_data['favorites'] = new_favorites
     
     if hasattr(update, 'answer'):
-        await update.answer(f"✅ {settlement_name} видалено з улюблених!")
+        if removed:
+            await update.answer(f"✅ {settlement_name} видалено з улюблених!")
+        else:
+            await update.answer("❌ Місто не знайдено в улюблених")
     
     # Показуємо оновлений список
     await show_favorites(update, context)
@@ -635,6 +681,16 @@ async def show_statistics(update: Update):
 async def process_current_weather(update: Update, settlement_name: str, region: str):
     """Обробка запиту про поточну погоду"""
     try:
+        # Зберігаємо останнє місто для кнопки "Додати до улюблених"
+        if hasattr(update, '_bot'):
+            context = update._bot
+        else:
+            context = update.callback_query._bot if hasattr(update, 'callback_query') else None
+        
+        if context:
+            context.user_data['last_city'] = settlement_name
+            context.user_data['last_region'] = region
+        
         if hasattr(update, 'edit_message_text'):
             message = await update.edit_message_text(
                 f"🔍 Отримую погоду для {settlement_name} ({region})...", 
@@ -688,12 +744,15 @@ async def process_current_weather(update: Update, settlement_name: str, region: 
         # Створюємо кнопки дій
         keyboard = [
             [
-                InlineKeyboardButton("📅 Прогноз на 3 дні", callback_data=f"forecast_city"),
-                InlineKeyboardButton("⭐️ Додати до улюблених", callback_data=f"add_fav_{settlement_name}")
+                InlineKeyboardButton("📅 Прогноз на 3 дні", callback_data="forecast_city"),
+                InlineKeyboardButton("⭐️ Додати до улюблених", callback_data="add_fav")
             ],
             [
-                InlineKeyboardButton("🔄 Оновити", callback_data=f"refresh"),
-                InlineKeyboardButton("🔍 Новий пошук", callback_data=f"new_search")
+                InlineKeyboardButton("🔄 Оновити", callback_data="refresh"),
+                InlineKeyboardButton("🔍 Новий пошук", callback_data="new_search")
+            ],
+            [
+                InlineKeyboardButton("↩️ Меню", callback_data="back_to_menu")
             ]
         ]
         
@@ -720,6 +779,16 @@ async def process_current_weather(update: Update, settlement_name: str, region: 
 async def process_3day_forecast(update: Update, settlement_name: str, region: str):
     """Обробка запиту про прогноз на 3 дні"""
     try:
+        # Зберігаємо останнє місто для кнопки "Додати до улюблених"
+        if hasattr(update, '_bot'):
+            context = update._bot
+        else:
+            context = update.callback_query._bot if hasattr(update, 'callback_query') else None
+        
+        if context:
+            context.user_data['last_city'] = settlement_name
+            context.user_data['last_region'] = region
+        
         if hasattr(update, 'edit_message_text'):
             message = await update.edit_message_text(
                 f"📅 Отримую прогноз для {settlement_name} ({region})...", 
@@ -785,12 +854,12 @@ async def process_3day_forecast(update: Update, settlement_name: str, region: st
         # Додаємо кнопки під останнім повідомленням
         keyboard = [
             [
-                InlineKeyboardButton("🌤 Поточна погода", callback_data=f"current_city"),
-                InlineKeyboardButton("⭐️ Додати до улюблених", callback_data=f"add_fav_{settlement_name}")
+                InlineKeyboardButton("🌤 Поточна погода", callback_data="current_city"),
+                InlineKeyboardButton("⭐️ Додати до улюблених", callback_data="add_fav")
             ],
             [
-                InlineKeyboardButton("🔍 Новий пошук", callback_data=f"new_search"),
-                InlineKeyboardButton("↩️ Меню", callback_data=f"back_to_menu")
+                InlineKeyboardButton("🔍 Новий пошук", callback_data="new_search"),
+                InlineKeyboardButton("↩️ Меню", callback_data="back_to_menu")
             ]
         ]
         
