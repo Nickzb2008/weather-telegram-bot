@@ -235,20 +235,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(settlements) == 1:
             settlement = settlements[0]
             if action == 'current':
-                await process_current_weather(update, settlement['name'], settlement['region'])
+                await process_current_weather(update, context, settlement['name'], settlement['region'])
             elif action == 'forecast':
-                await process_3day_forecast(update, settlement['name'], settlement['region'])
+                await process_3day_forecast(update, context, settlement['name'], settlement['region'])
             elif action == 'search':
-                await process_current_weather(update, settlement['name'], settlement['region'])
+                await process_current_weather(update, context, settlement['name'], settlement['region'])
             return
         
         # Якщо знайдено кілька результатів
-        await show_search_results(update, settlements, action, context)
+        await show_search_results(update, context, settlements, action)
         return
     
     # Звичайний пошук (якщо не очікуємо спеціального введення)
     if len(text) >= 2:
-        await handle_quick_search(update, text, context)
+        await handle_quick_search(update, context, text)
     else:
         await update.message.reply_text(
             "🤔 *Не розпізнано запит.*\n\n"
@@ -261,7 +261,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_main_keyboard()
         )
 
-async def handle_quick_search(update: Update, query: str, context: ContextTypes.DEFAULT_TYPE):
+async def handle_quick_search(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str):
     """Обробка швидкого пошуку"""
     settlements = settlements_db.find_settlements_by_prefix(query, limit=15)
     
@@ -275,7 +275,7 @@ async def handle_quick_search(update: Update, query: str, context: ContextTypes.
     
     if len(settlements) == 1:
         settlement = settlements[0]
-        await process_current_weather(update, settlement['name'], settlement['region'])
+        await process_current_weather(update, context, settlement['name'], settlement['region'])
         return
     
     # Показуємо результати пошуку
@@ -312,7 +312,7 @@ async def handle_quick_search(update: Update, query: str, context: ContextTypes.
         reply_markup=reply_markup
     )
 
-async def show_search_results(update: Update, settlements: List[dict], action: str, context: ContextTypes.DEFAULT_TYPE):
+async def show_search_results(update: Update, context: ContextTypes.DEFAULT_TYPE, settlements: List[dict], action: str):
     """Показати результати пошуку з інлайн-кнопками"""
     message = f"🔍 *Знайдено {len(settlements)} населених пунктів:*\n\n"
     
@@ -369,14 +369,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Обробляємо випадок з улюблених міст
                 favorites = context.user_data.get('favorites', [])
                 if favorites:
-                    await process_current_weather(query, favorites[0]['name'], favorites[0]['region'])
+                    await process_current_weather(update, context, favorites[0]['name'], favorites[0]['region'])
             else:
                 index = int(data.split('_')[1]) - 1
                 if 'last_search_results' in context.user_data:
                     results = context.user_data['last_search_results']
                     if 0 <= index < len(results):
                         settlement = results[index]
-                        await process_current_weather(query, settlement['name'], settlement['region'])
+                        await process_current_weather(update, context, settlement['name'], settlement['region'])
         except (ValueError, IndexError) as e:
             logger.error(f"Error processing current button: {e}")
             await query.answer("❌ Помилка обробки запиту")
@@ -388,14 +388,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Обробляємо випадок з улюблених міст
                 favorites = context.user_data.get('favorites', [])
                 if favorites:
-                    await process_3day_forecast(query, favorites[0]['name'], favorites[0]['region'])
+                    await process_3day_forecast(update, context, favorites[0]['name'], favorites[0]['region'])
             else:
                 index = int(data.split('_')[1]) - 1
                 if 'last_search_results' in context.user_data:
                     results = context.user_data['last_search_results']
                     if 0 <= index < len(results):
                         settlement = results[index]
-                        await process_3day_forecast(query, settlement['name'], settlement['region'])
+                        await process_3day_forecast(update, context, settlement['name'], settlement['region'])
         except (ValueError, IndexError) as e:
             logger.error(f"Error processing forecast button: {e}")
             await query.answer("❌ Помилка обробки запиту")
@@ -408,7 +408,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 results = context.user_data['last_search_results']
                 if 0 <= index < len(results):
                     settlement = results[index]
-                    await process_current_weather(query, settlement['name'], settlement['region'])
+                    await process_current_weather(update, context, settlement['name'], settlement['region'])
         except (ValueError, IndexError) as e:
             logger.error(f"Error processing city button: {e}")
             await query.answer("❌ Помилка обробки запиту")
@@ -420,7 +420,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if 'last_city' in context.user_data and 'last_region' in context.user_data:
                 settlement_name = context.user_data['last_city']
                 region = context.user_data['last_region']
-                await add_to_favorites(query, context, settlement_name, region)
+                await add_to_favorites(update, context, settlement_name, region)
             else:
                 await query.answer("❌ Не вдалося додати до улюблених. Спочатку знайдіть місто.")
         except Exception as e:
@@ -435,14 +435,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             favorites = context.user_data.get('favorites', [])
             if 0 <= fav_index < len(favorites):
                 fav = favorites[fav_index]
-                await remove_from_favorites(query, context, fav['name'], fav['region'])
+                await remove_from_favorites(update, context, fav['name'], fav['region'])
         except (ValueError, IndexError) as e:
             logger.error(f"Error removing from favorites: {e}")
             await query.answer("❌ Помилка при видаленні з улюблених")
     
     # Очищення улюблених
     elif data == 'clear_favorites':
-        await clear_favorites(query, context)
+        await clear_favorites(update, context)
     
     # Обласні центри
     elif data.startswith('region_'):
@@ -451,7 +451,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             centers = settlements_db.get_regional_centers()
             if 0 <= index < len(centers):
                 center = centers[index]
-                await process_current_weather(query, center['name'], center['region'])
+                await process_current_weather(update, context, center['name'], center['region'])
         except (ValueError, IndexError) as e:
             logger.error(f"Error processing region button: {e}")
             await query.answer("❌ Помилка обробки запиту")
@@ -474,7 +474,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if 'last_city' in context.user_data:
                 city = context.user_data['last_city']
                 region = context.user_data.get('last_region', '')
-                await process_current_weather(query, city, region)
+                await process_current_weather(update, context, city, region)
             else:
                 await query.answer("❌ Немає даних для оновлення")
         except Exception as e:
@@ -678,18 +678,12 @@ async def show_statistics(update: Update):
 # ОБРОБКА ПОГОДИ
 # ============================================================================
 
-async def process_current_weather(update: Update, settlement_name: str, region: str):
+async def process_current_weather(update: Update, context: ContextTypes.DEFAULT_TYPE, settlement_name: str, region: str):
     """Обробка запиту про поточну погоду"""
     try:
         # Зберігаємо останнє місто для кнопки "Додати до улюблених"
-        if hasattr(update, '_bot'):
-            context = update._bot
-        else:
-            context = update.callback_query._bot if hasattr(update, 'callback_query') else None
-        
-        if context:
-            context.user_data['last_city'] = settlement_name
-            context.user_data['last_region'] = region
+        context.user_data['last_city'] = settlement_name
+        context.user_data['last_region'] = region
         
         if hasattr(update, 'edit_message_text'):
             message = await update.edit_message_text(
@@ -776,18 +770,12 @@ async def process_current_weather(update: Update, settlement_name: str, region: 
         else:
             await update.reply_text(error_msg, parse_mode='Markdown')
 
-async def process_3day_forecast(update: Update, settlement_name: str, region: str):
+async def process_3day_forecast(update: Update, context: ContextTypes.DEFAULT_TYPE, settlement_name: str, region: str):
     """Обробка запиту про прогноз на 3 дні"""
     try:
         # Зберігаємо останнє місто для кнопки "Додати до улюблених"
-        if hasattr(update, '_bot'):
-            context = update._bot
-        else:
-            context = update.callback_query._bot if hasattr(update, 'callback_query') else None
-        
-        if context:
-            context.user_data['last_city'] = settlement_name
-            context.user_data['last_region'] = region
+        context.user_data['last_city'] = settlement_name
+        context.user_data['last_region'] = region
         
         if hasattr(update, 'edit_message_text'):
             message = await update.edit_message_text(
