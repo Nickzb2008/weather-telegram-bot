@@ -65,13 +65,14 @@ def get_main_keyboard():
         [KeyboardButton("🏙 Обласні центри")],
         [KeyboardButton("⭐️ Улюблені міста")],
         [KeyboardButton("📊 Статистика"), KeyboardButton("❓ Допомога")]
-    ], resize_keyboard=True, persistent=True)
+    ], resize_keyboard=True, is_persistent=True)  # Зміна тут
 
 def get_back_keyboard():
     """Отримати клавіатуру з кнопкою Назад"""
     return ReplyKeyboardMarkup([
         [KeyboardButton("↩️ Назад до меню")]
     ], resize_keyboard=True, one_time_keyboard=True)
+
 
 # ============================================================================
 # ОБРОБНИКИ КОМАНД
