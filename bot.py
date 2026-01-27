@@ -34,7 +34,7 @@ print("=" * 60)
 # Імпорт бібліотек
 try:
     import requests
-    from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+    from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
     from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
     print("✅ Libraries imported successfully")
 except ImportError as e:
@@ -46,82 +46,25 @@ from settlements_db import settlements_db
 from weather_api import weather_api
 
 # ============================================================================
-# ДОПОМІЖНІ ФУНКЦІЇ ДЛЯ ОБРОБКИ КНОПОК
+# КЛАВІАТУРА МЕНЮ
 # ============================================================================
 
-def create_callback_data(action: str, settlement_name: str, region: str = None) -> str:
-    """Створити безпечні дані для кнопок (не більше 64 символів)"""
-    if region:
-        # Спрощуємо регіон та скорочуємо якщо потрібно
-        region_short = region.replace('область', '').replace('АР ', '').strip()
-        if len(region_short) > 15:
-            region_short = region_short[:15]
-        
-        # Скорочуємо назву міста якщо потрібно
-        name_short = settlement_name
-        if len(name_short) > 20:
-            name_short = name_short[:20]
-        
-        # Створюємо унікальний ідентифікатор
-        callback_str = f"{action[:5]}_{name_short[:10]}_{region_short[:10]}"
-    else:
-        callback_str = action[:10]
-    
-    # Перевіряємо довжину
-    if len(callback_str) > 64:
-        # Якщо все ще задовго, використовуємо hash
-        import hashlib
-        hash_str = hashlib.md5(callback_str.encode()).hexdigest()[:10]
-        callback_str = f"{action[:5]}_{hash_str}"
-    
-    return callback_str[:64]
+def get_main_keyboard():
+    """Отримати головну клавіатуру меню"""
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("🌤 Поточна погода")],
+        [KeyboardButton("📅 Прогноз на 3 дні")],
+        [KeyboardButton("🔍 Пошук міста")],
+        [KeyboardButton("🏙 Обласні центри")],
+        [KeyboardButton("⭐️ Улюблені міста")],
+        [KeyboardButton("📊 Статистика"), KeyboardButton("❓ Допомога")]
+    ], resize_keyboard=True, persistent=True)
 
-def parse_callback_data(data: str, context: ContextTypes.DEFAULT_TYPE) -> tuple:
-    """Розпарсити дані кнопки"""
-    parts = data.split('_')
-    if len(parts) < 2:
-        return data, None, None
-    
-    action = parts[0]
-    
-    if action in ['main', 'search', 'region', 'forecast', 'fav', 'stats', 'help']:
-        # Прості дії без додаткових параметрів
-        return action, None, None
-    
-    elif action in ['weather', 'fcity', 'rcenter', 'addfav', 'remfav']:
-        # Дії з містом та регіоном
-        if len(parts) >= 3:
-            # Отримуємо з контексту
-            settlement_key = '_'.join(parts[1:])
-            if 'callback_cache' in context.user_data and settlement_key in context.user_data['callback_cache']:
-                settlement_info = context.user_data['callback_cache'][settlement_key]
-                return action, settlement_info.get('name'), settlement_info.get('region')
-    
-    return data, None, None
-
-def cache_settlement_info(context: ContextTypes.DEFAULT_TYPE, action: str, settlement_name: str, region: str) -> str:
-    """Кешувати інформацію про місто та повернути ключ"""
-    if 'callback_cache' not in context.user_data:
-        context.user_data['callback_cache'] = {}
-    
-    # Створюємо унікальний ключ
-    import hashlib
-    key = hashlib.md5(f"{settlement_name}_{region}".encode()).hexdigest()[:16]
-    
-    # Зберігаємо в кеш
-    context.user_data['callback_cache'][key] = {
-        'name': settlement_name,
-        'region': region
-    }
-    
-    # Очищаємо старий кеш якщо потрібно
-    if len(context.user_data['callback_cache']) > 50:
-        # Залишаємо тільки останні 30 записів
-        keys = list(context.user_data['callback_cache'].keys())
-        for old_key in keys[:-30]:
-            del context.user_data['callback_cache'][old_key]
-    
-    return key
+def get_back_keyboard():
+    """Отримати клавіатуру з кнопкою Назад"""
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("↩️ Назад до меню")]
+    ], resize_keyboard=True, one_time_keyboard=True)
 
 # ============================================================================
 # ОБРОБНИКИ КОМАНД
@@ -130,18 +73,6 @@ def cache_settlement_info(context: ContextTypes.DEFAULT_TYPE, action: str, settl
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start - головне меню"""
     user = update.effective_user
-    
-    # Основний клавіатура меню
-    keyboard = [
-        [InlineKeyboardButton("🔍 Пошук міста", callback_data="search")],
-        [InlineKeyboardButton("🏙 Обласні центри", callback_data="region")],
-        [InlineKeyboardButton("📅 Прогноз на 3 дні", callback_data="forecast")],
-        [InlineKeyboardButton("⭐️ Улюблені міста", callback_data="fav")],
-        [InlineKeyboardButton("📊 Статистика", callback_data="stats")],
-        [InlineKeyboardButton("❓ Допомога", callback_data="help")]
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
     
     welcome_text = (
         f"👋 Вітаю, {user.first_name}!\n\n"
@@ -153,442 +84,17 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Всі обласні центри України\n"
         f"• Збереження улюблених міст\n\n"
         f"📊 *База даних:* {len(settlements_db.settlements)} населених пунктів\n\n"
-        f"👇 *Оберіть опцію з меню:*"
+        f"👇 *Оберіть опцію з меню внизу:*"
     )
     
     await update.message.reply_text(
         welcome_text,
         parse_mode='Markdown',
-        reply_markup=reply_markup
+        reply_markup=get_main_keyboard()
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /help"""
-    await show_help_menu(update)
-
-async def find_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /find - пошук населеного пункту"""
-    if not context.args:
-        await show_search_menu(update)
-        return
-    
-    search_query = ' '.join(context.args)
-    await search_settlements(update, search_query, context)
-
-async def regions_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /regions - список областей України"""
-    await show_regional_centers_menu(update, context)
-
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /stats - статистика бази даних"""
-    await show_stats_menu(update)
-
-async def favorites_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /favorites - улюблені міста"""
-    await show_favorites_menu(update, context)
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обробка текстових повідомлень"""
-    text = update.message.text.strip()
-    
-    if text.startswith('/'):
-        return
-    
-    # Перевіряємо, чи це номер з попереднього пошуку
-    if 'last_search_results' in context.user_data and text.isdigit():
-        index = int(text) - 1
-        results = context.user_data['last_search_results']
-        
-        if 0 <= index < len(results):
-            settlement = results[index]
-            await process_weather_request(update, settlement['name'], settlement['region'], context)
-            # Очищуємо результати пошуку
-            context.user_data.pop('last_search_results', None)
-            return
-    
-    # Перевіряємо, чи містить назву області в дужках
-    import re
-    pattern = r'(.+?)\s*\(([^)]+)\)'
-    match = re.match(pattern, text)
-    
-    if match:
-        settlement_name = match.group(1).strip()
-        region = match.group(2).strip()
-        
-        # Шукаємо точне співпадіння
-        results = settlements_db.find_settlements_by_name(settlement_name, region)
-        if results:
-            await process_weather_request(update, settlement_name, region, context)
-            return
-    
-    # Звичайний пошук
-    if len(text) >= 2:
-        await search_settlements(update, text, context)
-    else:
-        await show_search_menu(update)
-
-# ============================================================================
-# МЕНЮ ТА КНОПКИ
-# ============================================================================
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обробка натискання кнопок"""
-    query = update.callback_query
-    await query.answer()
-    
-    data = query.data
-    action, settlement_name, region = parse_callback_data(data, context)
-    
-    logger.info(f"Button clicked: {data} -> action: {action}, city: {settlement_name}, region: {region}")
-    
-    if action == "main":
-        await show_main_menu(query)
-    
-    elif action == "search":
-        await show_search_menu(query)
-    
-    elif action == "region":
-        await show_regional_centers_menu(query, context)
-    
-    elif action == "forecast":
-        await show_forecast_menu(query, context)
-    
-    elif action == "fav":
-        await show_favorites_menu(query, context)
-    
-    elif action == "stats":
-        await show_stats_menu(query)
-    
-    elif action == "help":
-        await show_help_menu(query)
-    
-    elif action == "weather" and settlement_name and region:
-        await process_weather_request(query, settlement_name, region, context)
-    
-    elif action == "fcity" and settlement_name and region:
-        await process_forecast_request(query, settlement_name, region, context)
-    
-    elif action == "rcenter" and settlement_name and region:
-        await process_weather_request(query, settlement_name, region, context)
-    
-    elif action == "addfav" and settlement_name and region:
-        await add_to_favorites(query, context, settlement_name, region)
-    
-    elif action == "remfav" and settlement_name and region:
-        await remove_from_favorites(query, context, settlement_name, region)
-    
-    else:
-        logger.error(f"Unknown callback data: {data}")
-        await query.edit_message_text(
-            "❌ Помилка обробки запиту. Спробуйте ще раз.",
-            parse_mode='Markdown'
-        )
-
-async def show_main_menu(update):
-    """Показати головне меню"""
-    keyboard = [
-        [InlineKeyboardButton("🔍 Пошук міста", callback_data="search")],
-        [InlineKeyboardButton("🏙 Обласні центри", callback_data="region")],
-        [InlineKeyboardButton("📅 Прогноз на 3 дні", callback_data="forecast")],
-        [InlineKeyboardButton("⭐️ Улюблені міста", callback_data="fav")],
-        [InlineKeyboardButton("📊 Статистика", callback_data="stats")],
-        [InlineKeyboardButton("❓ Допомога", callback_data="help")]
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    if hasattr(update, 'edit_message_text'):
-        await update.edit_message_text(
-            "🇺🇦 *Український бот погоди*\n\n"
-            "👇 *Оберіть опцію з меню:*",
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-    else:
-        await update.reply_text(
-            "🇺🇦 *Український бот погоди*\n\n"
-            "👇 *Оберіть опцію з меню:*",
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-
-async def show_search_menu(update):
-    """Показати меню пошуку"""
-    keyboard = [
-        [InlineKeyboardButton("🏙 Обласні центри", callback_data="region")],
-        [InlineKeyboardButton("⭐️ Улюблені міста", callback_data="fav")],
-        [InlineKeyboardButton("↩️ Головне меню", callback_data="main")]
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    text = (
-        "🔍 *Пошук населеного пункту*\n\n"
-        "Введіть назву або частину назви:\n\n"
-        "*Приклади:*\n"
-        "• Київ\n"
-        "• ки\n"
-        "• нов\n"
-        "• Первомайськ (Миколаївська)\n\n"
-        "📝 Мінімум 2 символи"
-    )
-    
-    if hasattr(update, 'edit_message_text'):
-        await update.edit_message_text(
-            text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-    else:
-        await update.reply_text(
-            text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-
-async def show_regional_centers_menu(update, context):
-    """Показати меню обласних центрів"""
-    centers = settlements_db.get_regional_centers()
-    
-    # Групуємо центри по 2 в рядку
-    keyboard = []
-    row = []
-    
-    for i, center in enumerate(centers):
-        # Скорочуємо назву кнопки якщо потрібно
-        button_text = f"🏙 {center['name']}"
-        if len(button_text) > 20:
-            button_text = f"🏙 {center['name'][:17]}..."
-        
-        # Кешуємо інформацію про місто
-        cache_key = cache_settlement_info(context, "rcenter", center['name'], center['region'])
-        
-        row.append(InlineKeyboardButton(
-            button_text,
-            callback_data=f"rcenter_{cache_key}"
-        ))
-        
-        if len(row) == 2 or i == len(centers) - 1:
-            keyboard.append(row)
-            row = []
-    
-    # Додаємо кнопки навігації
-    keyboard.append([
-        InlineKeyboardButton("🔍 Пошук міста", callback_data="search"),
-        InlineKeyboardButton("📅 Прогноз на 3 дні", callback_data="forecast")
-    ])
-    keyboard.append([
-        InlineKeyboardButton("⭐️ Улюблені міста", callback_data="fav"),
-        InlineKeyboardButton("↩️ Головне меню", callback_data="main")
-    ])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    centers_text = "*Обласні центри України:*\n\n"
-    for i, center in enumerate(centers, 1):
-        centers_text += f"{i}. {center['name']} ({center['region']})\n"
-    
-    if hasattr(update, 'edit_message_text'):
-        await update.edit_message_text(
-            centers_text + "\n👇 *Оберіть місто:*",
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-    else:
-        await update.reply_text(
-            centers_text + "\n👇 *Оберіть місто:*",
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-
-async def show_forecast_menu(update, context):
-    """Показати меню прогнозу"""
-    # Перевіряємо, чи є останній пошук
-    if 'last_search_results' in context.user_data:
-        results = context.user_data['last_search_results']
-        
-        keyboard = []
-        for i, settlement in enumerate(results[:5]):
-            # Скорочуємо назву кнопки
-            button_text = f"📅 {settlement['name']}"
-            if len(button_text) > 20:
-                button_text = f"📅 {settlement['name'][:17]}..."
-            
-            # Кешуємо інформацію
-            cache_key = cache_settlement_info(context, "fcity", settlement['name'], settlement['region'])
-            
-            keyboard.append([InlineKeyboardButton(
-                button_text,
-                callback_data=f"fcity_{cache_key}"
-            )])
-        
-        keyboard.append([
-            InlineKeyboardButton("🔍 Новий пошук", callback_data="search"),
-            InlineKeyboardButton("↩️ Головне меню", callback_data="main")
-        ])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        text = "📅 *Прогноз на 3 дні*\n\nОберіть місто з останнього пошуку або введіть назву нового міста:"
-        
-        if hasattr(update, 'edit_message_text'):
-            await update.edit_message_text(
-                text,
-                parse_mode='Markdown',
-                reply_markup=reply_markup
-            )
-        else:
-            await update.reply_text(
-                text,
-                parse_mode='Markdown',
-                reply_markup=reply_markup
-            )
-    else:
-        keyboard = [
-            [InlineKeyboardButton("🏙 Обласні центри", callback_data="region")],
-            [InlineKeyboardButton("🔍 Пошук міста", callback_data="search")],
-            [InlineKeyboardButton("↩️ Головне меню", callback_data="main")]
-        ]
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        text = (
-            "📅 *Прогноз на 3 дні*\n\n"
-            "Введіть назву міста для отримання прогнозу на 3 дні.\n\n"
-            "📝 *Приклади:*\n"
-            "• Київ\n"
-            "• Одеса\n"
-            "• Львів\n\n"
-            "або оберіть місто з меню:"
-        )
-        
-        if hasattr(update, 'edit_message_text'):
-            await update.edit_message_text(
-                text,
-                parse_mode='Markdown',
-                reply_markup=reply_markup
-            )
-        else:
-            await update.reply_text(
-                text,
-                parse_mode='Markdown',
-                reply_markup=reply_markup
-            )
-
-async def show_favorites_menu(update, context):
-    """Показати меню улюблених міст"""
-    favorites = context.user_data.get('favorites', [])
-    
-    if not favorites:
-        keyboard = [
-            [InlineKeyboardButton("🔍 Пошук міста", callback_data="search")],
-            [InlineKeyboardButton("🏙 Обласні центри", callback_data="region")],
-            [InlineKeyboardButton("↩️ Головне меню", callback_data="main")]
-        ]
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        text = "⭐️ *Улюблені міста*\n\nУ вас ще немає улюблених міст.\n\nДодайте місто до улюблених, щоб швидко отримувати погоду."
-        
-        if hasattr(update, 'edit_message_text'):
-            await update.edit_message_text(
-                text,
-                parse_mode='Markdown',
-                reply_markup=reply_markup
-            )
-        else:
-            await update.reply_text(
-                text,
-                parse_mode='Markdown',
-                reply_markup=reply_markup
-            )
-        return
-    
-    keyboard = []
-    for fav in favorites[:10]:  # Обмежуємо до 10 міст
-        # Скорочуємо назву кнопки
-        button_text = f"🌤 {fav['name']}"
-        if len(button_text) > 20:
-            button_text = f"🌤 {fav['name'][:17]}..."
-        
-        # Кешуємо інформацію
-        cache_key = cache_settlement_info(context, "weather", fav['name'], fav['region'])
-        remove_key = cache_settlement_info(context, "remfav", fav['name'], fav['region'])
-        
-        keyboard.append([
-            InlineKeyboardButton(
-                button_text,
-                callback_data=f"weather_{cache_key}"
-            ),
-            InlineKeyboardButton(
-                "🗑",
-                callback_data=f"remfav_{remove_key}"
-            )
-        ])
-    
-    keyboard.append([
-        InlineKeyboardButton("🗑 Очистити улюблені", callback_data="clear_fav"),
-        InlineKeyboardButton("🔍 Додати ще", callback_data="search")
-    ])
-    keyboard.append([
-        InlineKeyboardButton("↩️ Головне меню", callback_data="main")
-    ])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    favorites_text = "⭐️ *Ваші улюблені міста:*\n\n"
-    for i, fav in enumerate(favorites, 1):
-        favorites_text += f"{i}. {fav['name']} ({fav['region']})\n"
-    
-    if hasattr(update, 'edit_message_text'):
-        await update.edit_message_text(
-            favorites_text + "\n👇 *Оберіть місто:*",
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-    else:
-        await update.reply_text(
-            favorites_text + "\n👇 *Оберіть місто:*",
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-
-async def show_stats_menu(update):
-    """Показати меню статистики"""
-    stats = settlements_db.get_statistics()
-    
-    stats_text = f"📊 *Статистика бази даних:*\n\n"
-    stats_text += f"• Унікальних назв: *{stats['unique_names']}*\n"
-    stats_text += f"• Загальна кількість записів: *{stats['total_entries']}*\n"
-    stats_text += f"• Областей: *{stats['regions_count']}*\n\n"
-    
-    stats_text += "*Топ-5 найбільших міст:*\n"
-    for i, city in enumerate(stats['largest_cities'][:5], 1):
-        stats_text += f"{i}. {city['name']} ({city['region']}): {city['population']:,} чол.\n"
-    
-    keyboard = [
-        [InlineKeyboardButton("🔍 Пошук міста", callback_data="search")],
-        [InlineKeyboardButton("🏙 Обласні центри", callback_data="region")],
-        [InlineKeyboardButton("↩️ Головне меню", callback_data="main")]
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    if hasattr(update, 'edit_message_text'):
-        await update.edit_message_text(
-            stats_text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-    else:
-        await update.reply_text(
-            stats_text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-
-async def show_help_menu(update):
-    """Показати меню довідки"""
     help_text = (
         "ℹ️ *Довідка по боту*\n\n"
         
@@ -618,140 +124,481 @@ async def show_help_menu(update):
         "• Наприклад: 'Новоград (Житомирська)'\n"
     )
     
+    await update.message.reply_text(
+        help_text,
+        parse_mode='Markdown',
+        reply_markup=get_main_keyboard()
+    )
+
+async def handle_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка натискань кнопок меню"""
+    text = update.message.text
+    
+    if text == "🌤 Поточна погода":
+        await update.message.reply_text(
+            "🔍 *Пошук для поточної погоди*\n\n"
+            "Введіть назву населеного пункту:",
+            parse_mode='Markdown',
+            reply_markup=get_back_keyboard()
+        )
+        context.user_data['awaiting_city_for'] = 'current'
+        
+    elif text == "📅 Прогноз на 3 дні":
+        await update.message.reply_text(
+            "📅 *Пошук для прогнозу на 3 дні*\n\n"
+            "Введіть назву населеного пункту:",
+            parse_mode='Markdown',
+            reply_markup=get_back_keyboard()
+        )
+        context.user_data['awaiting_city_for'] = 'forecast'
+        
+    elif text == "🔍 Пошук міста":
+        await update.message.reply_text(
+            "🔍 *Пошук населеного пункту*\n\n"
+            "Введіть назву або частину назви (мінімум 2 символи):",
+            parse_mode='Markdown',
+            reply_markup=get_back_keyboard()
+        )
+        context.user_data['awaiting_city_for'] = 'search'
+        
+    elif text == "🏙 Обласні центри":
+        await show_regional_centers(update, context)
+        
+    elif text == "⭐️ Улюблені міста":
+        await show_favorites(update, context)
+        
+    elif text == "📊 Статистика":
+        await show_statistics(update)
+        
+    elif text == "❓ Допомога":
+        await help_command(update, context)
+        
+    elif text == "↩️ Назад до меню":
+        await start_command(update, context)
+        if 'awaiting_city_for' in context.user_data:
+            del context.user_data['awaiting_city_for']
+
+# ============================================================================
+# ОБРОБКА ПОШУКУ
+# ============================================================================
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка текстових повідомлень"""
+    text = update.message.text.strip()
+    
+    # Перевіряємо, чи це команда
+    if text.startswith('/'):
+        return
+    
+    # Перевіряємо, чи очікуємо введення міста
+    if 'awaiting_city_for' in context.user_data:
+        action = context.user_data['awaiting_city_for']
+        
+        if text == "↩️ Назад до меню":
+            await start_command(update, context)
+            del context.user_data['awaiting_city_for']
+            return
+        
+        if len(text) < 2:
+            await update.message.reply_text(
+                "❌ *Занадто короткий запит.*\n\n"
+                "Введіть мінімум 2 символи для пошуку.",
+                parse_mode='Markdown',
+                reply_markup=get_back_keyboard()
+            )
+            return
+        
+        # Пошук населених пунктів
+        settlements = settlements_db.find_settlements_by_prefix(text, limit=20)
+        
+        if not settlements:
+            await update.message.reply_text(
+                f"❌ *Не знайдено населених пунктів за запитом '{text}'*\n\n"
+                f"📝 *Поради:*\n"
+                f"• Перевірте написання\n"
+                f"• Спробуйте іншу частину назви\n" 
+                f"• Використовуйте українську мову",
+                parse_mode='Markdown',
+                reply_markup=get_back_keyboard()
+            )
+            return
+        
+        # Якщо знайдено тільки один результат
+        if len(settlements) == 1:
+            settlement = settlements[0]
+            if action == 'current':
+                await process_current_weather(update, settlement['name'], settlement['region'])
+            elif action == 'forecast':
+                await process_3day_forecast(update, settlement['name'], settlement['region'])
+            elif action == 'search':
+                await process_current_weather(update, settlement['name'], settlement['region'])
+            return
+        
+        # Якщо знайдено кілька результатів
+        await show_search_results(update, settlements, action, context)
+        return
+    
+    # Звичайний пошук (якщо не очікуємо спеціального введення)
+    if len(text) >= 2:
+        await handle_quick_search(update, text, context)
+    else:
+        await update.message.reply_text(
+            "🤔 *Не розпізнано запит.*\n\n"
+            "📝 *Формати запитів:*\n"
+            "• Назва населеного пункту (напр. 'Київ')\n"
+            "• Частина назви (напр. 'ки')\n"
+            "• Назва з областю (напр. 'Новоград (Житомирська)')\n\n"
+            "ℹ️ Мінімум 2 символи для пошуку",
+            parse_mode='Markdown',
+            reply_markup=get_main_keyboard()
+        )
+
+async def handle_quick_search(update: Update, query: str, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка швидкого пошуку"""
+    settlements = settlements_db.find_settlements_by_prefix(query, limit=15)
+    
+    if not settlements:
+        await update.message.reply_text(
+            f"❌ *Не знайдено населених пунктів за запитом '{query}'*",
+            parse_mode='Markdown',
+            reply_markup=get_main_keyboard()
+        )
+        return
+    
+    if len(settlements) == 1:
+        settlement = settlements[0]
+        await process_current_weather(update, settlement['name'], settlement['region'])
+        return
+    
+    # Показуємо результати пошуку
+    message = f"🔍 *Знайдено {len(settlements)} населених пунктів:*\n\n"
+    
+    for i, settlement in enumerate(settlements[:10], 1):
+        pop_str = f" ({settlement['population']:,} чол.)" if settlement['population'] > 0 else ""
+        message += f"{i}. {settlement['name']} ({settlement['region']}){pop_str}\n"
+    
+    if len(settlements) > 10:
+        message += f"\n... та ще {len(settlements) - 10} інших\n"
+    
+    message += "\n📝 *Введіть номер пункту або повну назву з областю*"
+    
+    # Зберігаємо результати пошуку
+    context.user_data['last_search_results'] = settlements
+    context.user_data['last_search_query'] = query
+    
     keyboard = [
-        [InlineKeyboardButton("🔍 Пошук міста", callback_data="search")],
-        [InlineKeyboardButton("🏙 Обласні центри", callback_data="region")],
-        [InlineKeyboardButton("↩️ Головне меню", callback_data="main")]
+        [InlineKeyboardButton(f"{i}. {s['name']}", callback_data=f"city_{i}")]
+        for i, s in enumerate(settlements[:5], 1)
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    if hasattr(update, 'edit_message_text'):
-        await update.edit_message_text(
-            help_text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-    else:
-        await update.reply_text(
-            help_text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
+    await update.message.reply_text(
+        message,
+        parse_mode='Markdown',
+        reply_markup=reply_markup
+    )
 
-# ============================================================================
-# ОБРОБКА ПОШУКУ ТА ПОГОДИ
-# ============================================================================
-
-async def search_settlements(update: Update, query: str, context: Optional[ContextTypes.DEFAULT_TYPE] = None):
-    """Пошук населених пунктів"""
-    if len(query) < 2:
-        if hasattr(update, 'message'):
-            await update.message.reply_text(
-                "❌ *Занадто короткий запит.*\n\n"
-                "Введіть мінімум 2 символи для пошуку.",
-                parse_mode='Markdown'
-            )
-        else:
-            await update.edit_message_text(
-                "❌ *Занадто короткий запит.*\n\n"
-                "Введіть мінімум 2 символи для пошуку.",
-                parse_mode='Markdown'
-            )
-        return
-    
-    settlements = settlements_db.find_settlements_by_prefix(query, limit=15)
-    
-    if not settlements:
-        keyboard = [
-            [InlineKeyboardButton("🏙 Обласні центри", callback_data="region")],
-            [InlineKeyboardButton("❓ Допомога", callback_data="help")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        if hasattr(update, 'message'):
-            await update.message.reply_text(
-                f"❌ *Не знайдено населених пунктів за запитом '{query}'*\n\n"
-                f"📝 *Поради:*\n"
-                f"• Перевірте написання\n"
-                f"• Спробуйте іншу частину назви\n" 
-                f"• Використовуйте українську мову",
-                parse_mode='Markdown',
-                reply_markup=reply_markup
-            )
-        else:
-            await update.edit_message_text(
-                f"❌ *Не знайдено населених пунктів за запитом '{query}'*\n\n"
-                f"📝 *Поради:*\n"
-                f"• Перевірте написання\n"
-                f"• Спробуйте іншу частину назви\n" 
-                f"• Використовуйте українську мову",
-                parse_mode='Markdown',
-                reply_markup=reply_markup
-            )
-        return
-    
-    # Якщо знайдено тільки один результат - одразу показуємо погоду
-    if len(settlements) == 1:
-        settlement = settlements[0]
-        await process_weather_request(update, settlement['name'], settlement['region'], context)
-        return
-    
-    # Якщо кілька результатів - показуємо список
+async def show_search_results(update: Update, settlements: List[dict], action: str, context: ContextTypes.DEFAULT_TYPE):
+    """Показати результати пошуку з інлайн-кнопками"""
     message = f"🔍 *Знайдено {len(settlements)} населених пунктів:*\n\n"
     
-    # Формуємо список
-    for i, settlement in enumerate(settlements[:15], 1):
+    for i, settlement in enumerate(settlements[:10], 1):
         pop_str = f" ({settlement['population']:,} чол.)" if settlement['population'] > 0 else ""
         message += f"{i}. {settlement['name']} ({settlement['region']}){pop_str}\n"
     
-    message += "\n📝 *Виберіть номер пункту або напишіть повну назву з вказанням області*"
+    if len(settlements) > 10:
+        message += f"\n... та ще {len(settlements) - 10} інших\n"
     
-    # Зберігаємо результати пошуку в контексті
-    if context:
-        context.user_data['last_search_results'] = settlements
-        context.user_data['last_search_query'] = query
+    # Створюємо кнопки
+    keyboard = []
+    for i, settlement in enumerate(settlements[:5], 1):
+        if action == 'current':
+            callback_data = f"current_{i}"
+        elif action == 'forecast':
+            callback_data = f"forecast_{i}"
+        else:
+            callback_data = f"city_{i}"
+        
+        keyboard.append([InlineKeyboardButton(
+            f"{i}. {settlement['name']}",
+            callback_data=callback_data
+        )])
     
-    keyboard = [
-        [InlineKeyboardButton("📅 Прогноз на 3 дні", callback_data="forecast")],
-        [InlineKeyboardButton("↩️ Головне меню", callback_data="main")]
-    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Зберігаємо результати
+    context.user_data['last_search_results'] = settlements
+    context.user_data['last_search_action'] = action
+    
+    await update.message.reply_text(
+        message + "\n👇 *Оберіть пункт:*",
+        parse_mode='Markdown',
+        reply_markup=reply_markup
+    )
+
+# ============================================================================
+# ОБРОБНИКИ ІНЛАЙН-КНОПОК
+# ============================================================================
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробка натискання інлайн-кнопок"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    
+    if data.startswith('current_'):
+        index = int(data.split('_')[1]) - 1
+        if 'last_search_results' in context.user_data:
+            results = context.user_data['last_search_results']
+            if 0 <= index < len(results):
+                settlement = results[index]
+                await process_current_weather(query, settlement['name'], settlement['region'])
+    
+    elif data.startswith('forecast_'):
+        index = int(data.split('_')[1]) - 1
+        if 'last_search_results' in context.user_data:
+            results = context.user_data['last_search_results']
+            if 0 <= index < len(results):
+                settlement = results[index]
+                await process_3day_forecast(query, settlement['name'], settlement['region'])
+    
+    elif data.startswith('city_'):
+        index = int(data.split('_')[1]) - 1
+        if 'last_search_results' in context.user_data:
+            results = context.user_data['last_search_results']
+            if 0 <= index < len(results):
+                settlement = results[index]
+                await process_current_weather(query, settlement['name'], settlement['region'])
+    
+    elif data.startswith('add_fav_'):
+        parts = data.split('_')
+        if len(parts) >= 3:
+            city_index = int(parts[2]) - 1
+            if 'last_search_results' in context.user_data:
+                results = context.user_data['last_search_results']
+                if 0 <= city_index < len(results):
+                    settlement = results[city_index]
+                    await add_to_favorites(query, context, settlement['name'], settlement['region'])
+    
+    elif data.startswith('remove_fav_'):
+        parts = data.split('_')
+        if len(parts) >= 3:
+            fav_index = int(parts[2]) - 1
+            favorites = context.user_data.get('favorites', [])
+            if 0 <= fav_index < len(favorites):
+                fav = favorites[fav_index]
+                await remove_from_favorites(query, context, fav['name'], fav['region'])
+    
+    elif data == 'clear_favorites':
+        await clear_favorites(query, context)
+    
+    elif data.startswith('region_'):
+        index = int(data.split('_')[1]) - 1
+        centers = settlements_db.get_regional_centers()
+        if 0 <= index < len(centers):
+            center = centers[index]
+            await process_current_weather(query, center['name'], center['region'])
+
+# ============================================================================
+# ОБЛАСНІ ЦЕНТРИ
+# ============================================================================
+
+async def show_regional_centers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показати обласні центри"""
+    centers = settlements_db.get_regional_centers()
+    
+    centers_text = "🏙 *Обласні центри України:*\n\n"
+    for i, center in enumerate(centers, 1):
+        centers_text += f"{i}. {center['name']} ({center['region']})\n"
+    
+    # Створюємо кнопки
+    keyboard = []
+    row = []
+    for i, center in enumerate(centers, 1):
+        button_text = f"{i}. {center['name']}"
+        if len(button_text) > 20:
+            button_text = f"{i}. {center['name'][:17]}..."
+        
+        row.append(InlineKeyboardButton(button_text, callback_data=f"region_{i}"))
+        
+        if len(row) == 2 or i == len(centers):
+            keyboard.append(row)
+            row = []
+    
+    keyboard.append([InlineKeyboardButton("↩️ Назад", callback_data="back_to_menu")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if hasattr(update, 'message'):
         await update.message.reply_text(
-            message,
+            centers_text + "\n👇 *Оберіть місто:*",
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
     else:
         await update.edit_message_text(
-            message,
+            centers_text + "\n👇 *Оберіть місто:*",
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
 
-async def process_weather_request(update: Update, settlement_name: str, region: str, context: ContextTypes.DEFAULT_TYPE):
-    """Обробка запиту про поточну погоду"""
-    try:
-        # Повідомлення про завантаження
-        loading_text = f"🔍 Отримую погоду для {settlement_name} ({region})..."
-        
+# ============================================================================
+# УЛЮБЛЕНІ МІСТА
+# ============================================================================
+
+async def show_favorites(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показати улюблені міста"""
+    favorites = context.user_data.get('favorites', [])
+    
+    if not favorites:
         if hasattr(update, 'message'):
-            message = await update.message.reply_text(
-                loading_text, 
+            await update.message.reply_text(
+                "⭐️ *Улюблені міста*\n\n"
+                "У вас ще немає улюблених міст.\n\n"
+                "Додайте місто до улюблених, щоб швидко отримувати погоду.",
+                parse_mode='Markdown',
+                reply_markup=get_main_keyboard()
+            )
+        else:
+            await update.edit_message_text(
+                "⭐️ *Улюблені міста*\n\n"
+                "У вас ще немає улюблених міст.\n\n"
+                "Додайте місто до улюблених, щоб швидко отримувати погоду.",
                 parse_mode='Markdown'
             )
-        elif hasattr(update, 'edit_message_text'):
+        return
+    
+    favorites_text = "⭐️ *Ваші улюблені міста:*\n\n"
+    for i, fav in enumerate(favorites, 1):
+        favorites_text += f"{i}. {fav['name']} ({fav['region']})\n"
+    
+    # Створюємо кнопки
+    keyboard = []
+    for i, fav in enumerate(favorites, 1):
+        keyboard.append([
+            InlineKeyboardButton(f"🌤 {fav['name']}", callback_data=f"current_{i}"),
+            InlineKeyboardButton("🗑", callback_data=f"remove_fav_{i}")
+        ])
+    
+    keyboard.append([InlineKeyboardButton("🗑 Очистити улюблені", callback_data="clear_favorites")])
+    keyboard.append([InlineKeyboardButton("↩️ Назад", callback_data="back_to_menu")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Зберігаємо список улюблених для callback
+    context.user_data['last_search_results'] = favorites
+    context.user_data['last_search_action'] = 'current'
+    
+    if hasattr(update, 'message'):
+        await update.message.reply_text(
+            favorites_text + "\n👇 *Оберіть місто:*",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+    else:
+        await update.edit_message_text(
+            favorites_text + "\n👇 *Оберіть місто:*",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+
+async def add_to_favorites(update, context, settlement_name, region):
+    """Додати місто до улюблених"""
+    favorites = context.user_data.get('favorites', [])
+    
+    # Перевіряємо, чи вже є в улюблених
+    for fav in favorites:
+        if fav['name'] == settlement_name and fav['region'] == region:
+            if hasattr(update, 'answer'):
+                await update.answer("✅ Це місто вже в улюблених!")
+            return
+    
+    # Додаємо до улюблених
+    favorites.append({
+        'name': settlement_name,
+        'region': region
+    })
+    context.user_data['favorites'] = favorites
+    
+    if hasattr(update, 'answer'):
+        await update.answer(f"✅ {settlement_name} додано до улюблених!")
+    
+    # Показуємо оновлений список
+    await show_favorites(update, context)
+
+async def remove_from_favorites(update, context, settlement_name, region):
+    """Видалити місто з улюблених"""
+    favorites = context.user_data.get('favorites', [])
+    
+    # Шукаємо та видаляємо місто
+    new_favorites = []
+    for fav in favorites:
+        if not (fav['name'] == settlement_name and fav['region'] == region):
+            new_favorites.append(fav)
+    
+    context.user_data['favorites'] = new_favorites
+    
+    if hasattr(update, 'answer'):
+        await update.answer(f"✅ {settlement_name} видалено з улюблених!")
+    
+    # Показуємо оновлений список
+    await show_favorites(update, context)
+
+async def clear_favorites(update, context):
+    """Очистити улюблені міста"""
+    context.user_data['favorites'] = []
+    
+    if hasattr(update, 'answer'):
+        await update.answer("✅ Улюблені міста очищено!")
+    
+    await show_favorites(update, context)
+
+# ============================================================================
+# СТАТИСТИКА
+# ============================================================================
+
+async def show_statistics(update: Update):
+    """Показати статистику"""
+    stats = settlements_db.get_statistics()
+    
+    stats_text = f"📊 *Статистика бази даних:*\n\n"
+    stats_text += f"• Унікальних назв: *{stats['unique_names']}*\n"
+    stats_text += f"• Загальна кількість записів: *{stats['total_entries']}*\n"
+    stats_text += f"• Областей: *{stats['regions_count']}*\n\n"
+    
+    stats_text += "*Топ-5 найбільших міст:*\n"
+    for i, city in enumerate(stats['largest_cities'][:5], 1):
+        stats_text += f"{i}. {city['name']} ({city['region']}): {city['population']:,} чол.\n"
+    
+    if hasattr(update, 'message'):
+        await update.message.reply_text(
+            stats_text,
+            parse_mode='Markdown',
+            reply_markup=get_main_keyboard()
+        )
+    else:
+        await update.edit_message_text(
+            stats_text,
+            parse_mode='Markdown'
+        )
+
+# ============================================================================
+# ОБРОБКА ПОГОДИ
+# ============================================================================
+
+async def process_current_weather(update: Update, settlement_name: str, region: str):
+    """Обробка запиту про поточну погоду"""
+    try:
+        if hasattr(update, 'edit_message_text'):
             message = await update.edit_message_text(
-                loading_text, 
+                f"🔍 Отримую погоду для {settlement_name} ({region})...", 
                 parse_mode='Markdown'
             )
         else:
-            # Якщо це просто update, надсилаємо нове повідомлення
-            message = await update.reply_text(
-                loading_text, 
+            message = await update.message.reply_text(
+                f"🔍 Отримую погоду для {settlement_name} ({region})...", 
                 parse_mode='Markdown'
             )
         
@@ -794,23 +641,15 @@ async def process_weather_request(update: Update, settlement_name: str, region: 
                 await update.reply_text(error_text, parse_mode='Markdown')
             return
         
-        # Кешуємо інформацію для кнопок
-        fav_key = cache_settlement_info(context, "addfav", settlement_name, region)
-        forecast_key = cache_settlement_info(context, "fcity", settlement_name, region)
-        weather_key = cache_settlement_info(context, "weather", settlement_name, region)
-        
-        # Додаємо кнопки дій
+        # Створюємо кнопки дій
         keyboard = [
             [
-                InlineKeyboardButton("⭐️ Додати до улюблених", callback_data=f"addfav_{fav_key}"),
-                InlineKeyboardButton("📅 Прогноз на 3 дні", callback_data=f"fcity_{forecast_key}")
+                InlineKeyboardButton("📅 Прогноз на 3 дні", callback_data=f"forecast_city"),
+                InlineKeyboardButton("⭐️ Додати до улюблених", callback_data=f"add_fav_{settlement_name}")
             ],
             [
-                InlineKeyboardButton("🔄 Оновити", callback_data=f"weather_{weather_key}"),
-                InlineKeyboardButton("🔍 Новий пошук", callback_data="search")
-            ],
-            [
-                InlineKeyboardButton("↩️ Головне меню", callback_data="main")
+                InlineKeyboardButton("🔄 Оновити", callback_data=f"refresh"),
+                InlineKeyboardButton("🔍 Новий пошук", callback_data=f"new_search")
             ]
         ]
         
@@ -834,25 +673,17 @@ async def process_weather_request(update: Update, settlement_name: str, region: 
         else:
             await update.reply_text(error_msg, parse_mode='Markdown')
 
-async def process_forecast_request(update: Update, settlement_name: str, region: str, context: ContextTypes.DEFAULT_TYPE):
+async def process_3day_forecast(update: Update, settlement_name: str, region: str):
     """Обробка запиту про прогноз на 3 дні"""
     try:
-        # Повідомлення про завантаження
-        loading_text = f"📅 Отримую прогноз для {settlement_name} ({region})..."
-        
-        if hasattr(update, 'message'):
-            message = await update.message.reply_text(
-                loading_text, 
-                parse_mode='Markdown'
-            )
-        elif hasattr(update, 'edit_message_text'):
+        if hasattr(update, 'edit_message_text'):
             message = await update.edit_message_text(
-                loading_text, 
+                f"📅 Отримую прогноз для {settlement_name} ({region})...", 
                 parse_mode='Markdown'
             )
         else:
-            message = await update.reply_text(
-                loading_text, 
+            message = await update.message.reply_text(
+                f"📅 Отримую прогноз для {settlement_name} ({region})...", 
                 parse_mode='Markdown'
             )
         
@@ -895,37 +726,33 @@ async def process_forecast_request(update: Update, settlement_name: str, region:
                 await update.reply_text(error_text, parse_mode='Markdown')
             return
         
-        # Кешуємо інформацію для кнопок
-        weather_key = cache_settlement_info(context, "weather", settlement_name, region)
-        fav_key = cache_settlement_info(context, "addfav", settlement_name, region)
-        
         # Надсилаємо кожне повідомлення окремо
         for i, forecast_text in enumerate(forecast_messages):
             if i == 0:
-                # Перше повідомлення - редагуємо оригінальне
+                # Перше повідомлення
                 if hasattr(message, 'edit_text'):
                     await message.edit_text(forecast_text, parse_mode='Markdown')
                 else:
                     await update.reply_text(forecast_text, parse_mode='Markdown')
             else:
-                # Інші повідомлення - надсилаємо нові
+                # Інші повідомлення
                 await update.reply_text(forecast_text, parse_mode='Markdown')
         
         # Додаємо кнопки під останнім повідомленням
         keyboard = [
             [
-                InlineKeyboardButton("🌤 Поточна погода", callback_data=f"weather_{weather_key}"),
-                InlineKeyboardButton("⭐️ Додати до улюблених", callback_data=f"addfav_{fav_key}")
+                InlineKeyboardButton("🌤 Поточна погода", callback_data=f"current_city"),
+                InlineKeyboardButton("⭐️ Додати до улюблених", callback_data=f"add_fav_{settlement_name}")
             ],
             [
-                InlineKeyboardButton("🔍 Новий пошук", callback_data="search"),
-                InlineKeyboardButton("↩️ Головне меню", callback_data="main")
+                InlineKeyboardButton("🔍 Новий пошук", callback_data=f"new_search"),
+                InlineKeyboardButton("↩️ Меню", callback_data=f"back_to_menu")
             ]
         ]
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        # Надсилаємо останнє повідомлення з кнопками
+        # Надсилаємо повідомлення з кнопками
         await update.reply_text(
             "👇 *Оберіть дію:*",
             parse_mode='Markdown',
@@ -946,79 +773,12 @@ async def process_forecast_request(update: Update, settlement_name: str, region:
             await update.reply_text(error_msg, parse_mode='Markdown')
 
 # ============================================================================
-# УЛЮБЛЕНІ МІСТА
-# ============================================================================
-
-async def add_to_favorites(update, context, settlement_name, region):
-    """Додати місто до улюблених"""
-    favorites = context.user_data.get('favorites', [])
-    
-    # Перевіряємо, чи вже є в улюблених
-    for fav in favorites:
-        if fav['name'] == settlement_name and fav['region'] == region:
-            await update.answer("✅ Це місто вже в улюблених!")
-            return
-    
-    # Додаємо до улюблених
-    favorites.append({
-        'name': settlement_name,
-        'region': region
-    })
-    context.user_data['favorites'] = favorites
-    
-    await update.answer(f"✅ {settlement_name} додано до улюблених!")
-
-async def remove_from_favorites(update, context, settlement_name, region):
-    """Видалити місто з улюблених"""
-    favorites = context.user_data.get('favorites', [])
-    
-    # Шукаємо та видаляємо місто
-    new_favorites = []
-    for fav in favorites:
-        if not (fav['name'] == settlement_name and fav['region'] == region):
-            new_favorites.append(fav)
-    
-    context.user_data['favorites'] = new_favorites
-    
-    await update.answer(f"✅ {settlement_name} видалено з улюблених!")
-    await show_favorites_menu(update, context)
-
-async def clear_favorites(update, context):
-    """Очистити улюблені міста"""
-    context.user_data['favorites'] = []
-    
-    keyboard = [
-        [InlineKeyboardButton("🔍 Пошук міста", callback_data="search")],
-        [InlineKeyboardButton("↩️ Головне меню", callback_data="main")]
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.edit_message_text(
-        "✅ *Улюблені міста очищено!*\n\n"
-        "Список улюблених міст порожній.",
-        parse_mode='Markdown',
-        reply_markup=reply_markup
-    )
-
-# ============================================================================
 # ОБРОБНИК ПОМИЛОК
 # ============================================================================
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробник помилок"""
     logger.error(f"Bot error: {context.error}", exc_info=True)
-    
-    # Спробуємо відправити повідомлення про помилку
-    try:
-        if update and hasattr(update, 'effective_chat'):
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text="❌ Виникла помилка при обробці запиту. Спробуйте ще раз.",
-                parse_mode='Markdown'
-            )
-    except:
-        pass
 
 # ============================================================================
 # ГОЛОВНА ФУНКЦІЯ
@@ -1034,12 +794,11 @@ def main():
         # Додавання обробників команд
         application.add_handler(CommandHandler("start", start_command))
         application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CommandHandler("find", find_command))
-        application.add_handler(CommandHandler("regions", regions_command))
-        application.add_handler(CommandHandler("stats", stats_command))
-        application.add_handler(CommandHandler("favorites", favorites_command))
         
-        # Обробник кнопок
+        # Обробник кнопок меню
+        application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^(🌤|📅|🔍|🏙|⭐️|📊|❓|↩️)'), handle_menu_button))
+        
+        # Обробник інлайн-кнопок
         application.add_handler(CallbackQueryHandler(button_handler))
         
         # Обробник текстових повідомлень
