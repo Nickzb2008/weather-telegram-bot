@@ -887,18 +887,52 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ГОЛОВНА ФУНКЦІЯ
 # ============================================================================
 
-# Замініть всю функцію main() на:
-
-async def run_bot():
-    """Запуск бота для імпорту з main.py"""
-    # Ця функція тепер не використовується напряму
-    pass
-
 def main():
-    """Застаріла функція - використовуйте main.py"""
-    print("⚠️  Ця функція застаріла. Використовуйте main.py")
-    print("Запускайте через: python main.py")
-    sys.exit(1)
+    """Запуск бота"""
+    try:
+        print("🚀 Creating Telegram application...")
+        
+        # Створюємо Application
+        application = Application.builder().token(TELEGRAM_TOKEN).build()
+        
+        # Додавання обробників команд
+        application.add_handler(CommandHandler("start", start_command))
+        application.add_handler(CommandHandler("help", help_command))
+        
+        # Обробник кнопок меню
+        application.add_handler(MessageHandler(
+            filters.TEXT & filters.Regex(r'^(🌤|📅|🔍|🏙|⭐️|📊|❓|↩️)'), 
+            handle_menu_button
+        ))
+        
+        # Обробник інлайн-кнопок
+        application.add_handler(CallbackQueryHandler(button_handler))
+        
+        # Обробник текстових повідомлень
+        application.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND, 
+            handle_message
+        ))
+        
+        # Обробник помилок
+        application.add_error_handler(error_handler)
+        
+        print("✅ Application created")
+        print(f"✅ Database loaded: {len(settlements_db.settlements)} settlements")
+        print("🚀 Starting bot polling...")
+        
+        # Запускаємо бота
+        application.run_polling(
+            drop_pending_updates=True,
+            timeout=30,
+            pool_timeout=30
+        )
+        
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
 
 if __name__ == '__main__':
     main()
