@@ -1,3 +1,6 @@
+import signal
+signal.signal(signal.SIGINT, signal.SIG_IGN)
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
 import os
 import logging
 import sys

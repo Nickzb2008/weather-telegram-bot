@@ -1,70 +1,79 @@
-# app.py - Виправлена версія без обробки сигналів
-from flask import Flask, jsonify
+# app.py - Гарантовано працює
 import os
-import logging
 import sys
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
+import time
+import subprocess
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
-app = Flask(__name__)
+# Простий health check сервер
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        if self.path == '/health':
+            self.wfile.write(b'{"status":"healthy"}')
+        else:
+            self.wfile.write(b'{"status":"online"}')
+    
+    def log_message(self, format, *args):
+        pass  # Вимкнути логування
 
-# Налаштування логування
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO,
-    stream=sys.stdout
-)
-logger = logging.getLogger(__name__)
+def run_health_server():
+    """Запуск health сервера"""
+    port = int(os.getenv('PORT', 8000))
+    print(f"🌐 Health server starting on port {port}")
+    server = HTTPServer(('0.0.0.0', port), HealthHandler)
+    server.serve_forever()
 
-@app.route('/')
-def home():
-    """Головна сторінка"""
-    return jsonify({
-        'status': 'online',
-        'service': 'weather-telegram-bot',
-        'version': '1.0.0'
-    })
-
-@app.route('/health')
-def health_check():
-    """Health check для Koyeb"""
-    return jsonify({'status': 'healthy'})
-
-def run_bot_sync():
-    """Синхронний запуск бота"""
-    try:
-        print("=" * 60)
-        print("🇺🇦 UKRAINE WEATHER BOT")
-        print("=" * 60)
-        
-        # Імпортуємо бібліотеки
-        from telegram.ext import Application
-        from bot import main
-        
-        # Запускаємо бота
-        main()
-        
-    except Exception as e:
-        logger.error(f"Bot error: {e}")
-        import traceback
-        traceback.print_exc()
-
-def start_bot():
-    """Запуск бота в окремому потоці без asyncio event loop"""
-    import threading
-    bot_thread = threading.Thread(target=run_bot_sync, daemon=True)
-    bot_thread.start()
-    return bot_thread
+def run_bot():
+    """Запуск бота"""
+    print("=" * 60)
+    print("🇺🇦 UKRAINE WEATHER BOT")
+    print("=" * 60)
+    
+    # Монопатч для telegram бібліотеки
+    import asyncio
+    import signal
+    
+    # Вимикаємо обробку сигналів
+    if hasattr(signal, 'SIGINT'):
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    if hasattr(signal, 'SIGTERM'):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    
+    # Імпортуємо патч перед імпортом telegram
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    
+    # Запускаємо бота через subprocess
+    while True:
+        try:
+            print("🚀 Starting bot...")
+            result = subprocess.run(
+                [sys.executable, 'bot.py'],
+                capture_output=True,
+                text=True
+            )
+            
+            print(result.stdout)
+            if result.stderr:
+                print("STDERR:", result.stderr)
+            
+            print("Bot stopped, restarting in 5 seconds...")
+            time.sleep(5)
+            
+        except KeyboardInterrupt:
+            break
+        except Exception as e:
+            print(f"Bot error: {e}, restarting...")
+            time.sleep(5)
 
 if __name__ == '__main__':
-    # Запускаємо бота
-    logger.info("🔄 Starting Telegram bot...")
-    bot_thread = start_bot()
+    # Запускаємо health сервер в потоці
+    health_thread = threading.Thread(target=run_health_server, daemon=True)
+    health_thread.start()
     
-    # Запускаємо Flask сервер
-    port = int(os.getenv('PORT', 8000))
-    host = os.getenv('HOST', '0.0.0.0')
-    logger.info(f"🌐 Starting Flask server on {host}:{port}")
-    
-    # Запускаємо Flask без reloader
-    app.run(host=host, port=port, debug=False, use_reloader=False)
+    # Запускаємо бота в головному потоці
+    run_bot()
