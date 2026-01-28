@@ -1297,13 +1297,45 @@ async def start_command_for_callback(query, context):
 
 
 # ============================================================================
-# ГОЛОВНА ФУНКЦІЯ
+# HEALTH SERVER ДЛЯ KOYEB
+# ============================================================================
+
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        if self.path == '/health':
+            self.wfile.write(b'{"status":"healthy"}')
+        else:
+            self.wfile.write(b'{"status":"online"}')
+    
+    def log_message(self, format, *args):
+        pass  # Вимкнути логування
+
+def run_health_server():
+    """Запуск health сервера"""
+    port = int(os.getenv('PORT', 8000))
+    print(f"🌐 Health server starting on port {port}")
+    server = HTTPServer(('0.0.0.0', port), HealthHandler)
+    server.serve_forever()
+
+# ============================================================================
+# ОНОВЛЕНА ГОЛОВНА ФУНКЦІЯ
 # ============================================================================
 
 def main():
-    """Запуск бота"""
+    """Запуск бота з health сервером"""
     try:
         print("🚀 Creating Telegram application...")
+        
+        # Запускаємо health сервер у окремому потоці
+        health_thread = threading.Thread(target=run_health_server, daemon=True)
+        health_thread.start()
+        print(f"✅ Health server started on port {os.getenv('PORT', 8000)}")
         
         # Створюємо Application
         application = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -1338,7 +1370,8 @@ def main():
         application.run_polling(
             drop_pending_updates=True,
             timeout=30,
-            pool_timeout=30
+            pool_timeout=30,
+            close_loop=False  # ВАЖЛИВО: не закривати loop
         )
         
     except Exception as e:
