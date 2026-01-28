@@ -364,6 +364,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     data = query.data
     
+    # ВИПРАВЛЕНО: Додаємо збереження query для подальшого використання
+    context.user_data['last_callback_query'] = query
+    
     # Спрощена обробка для current_
     if data.startswith('current_'):
         try:
@@ -371,14 +374,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Обробляємо випадок з улюблених міст
                 favorites = context.user_data.get('favorites', [])
                 if favorites:
-                    await process_current_weather(update, context, favorites[0]['name'], favorites[0]['region'])
+                    # ВИПРАВЛЕНО: Використовуємо query для отримання update
+                    await process_current_weather_for_callback(query, context, favorites[0]['name'], favorites[0]['region'])
             else:
                 index = int(data.split('_')[1]) - 1
                 if 'last_search_results' in context.user_data:
                     results = context.user_data['last_search_results']
                     if 0 <= index < len(results):
                         settlement = results[index]
-                        await process_current_weather(update, context, settlement['name'], settlement['region'])
+                        await process_current_weather_for_callback(query, context, settlement['name'], settlement['region'])
         except (ValueError, IndexError) as e:
             logger.error(f"Error processing current button: {e}")
             await query.answer("❌ Помилка обробки запиту")
@@ -390,14 +394,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Обробляємо випадок з улюблених міст
                 favorites = context.user_data.get('favorites', [])
                 if favorites:
-                    await process_3day_forecast(update, context, favorites[0]['name'], favorites[0]['region'])
+                    await process_3day_forecast_for_callback(query, context, favorites[0]['name'], favorites[0]['region'])
             else:
                 index = int(data.split('_')[1]) - 1
                 if 'last_search_results' in context.user_data:
                     results = context.user_data['last_search_results']
                     if 0 <= index < len(results):
                         settlement = results[index]
-                        await process_3day_forecast(update, context, settlement['name'], settlement['region'])
+                        await process_3day_forecast_for_callback(query, context, settlement['name'], settlement['region'])
         except (ValueError, IndexError) as e:
             logger.error(f"Error processing forecast button: {e}")
             await query.answer("❌ Помилка обробки запиту")
@@ -410,7 +414,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 results = context.user_data['last_search_results']
                 if 0 <= index < len(results):
                     settlement = results[index]
-                    await process_current_weather(update, context, settlement['name'], settlement['region'])
+                    await process_current_weather_for_callback(query, context, settlement['name'], settlement['region'])
         except (ValueError, IndexError) as e:
             logger.error(f"Error processing city button: {e}")
             await query.answer("❌ Помилка обробки запиту")
@@ -422,7 +426,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if 'last_city' in context.user_data and 'last_region' in context.user_data:
                 settlement_name = context.user_data['last_city']
                 region = context.user_data['last_region']
-                await add_to_favorites(update, context, settlement_name, region)
+                # ВИПРАВЛЕНО: Використовуємо спеціальну функцію для callback
+                await add_to_favorites_from_callback(query, context, settlement_name, region)
             else:
                 await query.answer("❌ Не вдалося додати до улюблених. Спочатку знайдіть місто.")
         except Exception as e:
@@ -437,14 +442,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             favorites = context.user_data.get('favorites', [])
             if 0 <= fav_index < len(favorites):
                 fav = favorites[fav_index]
-                await remove_from_favorites(update, context, fav['name'], fav['region'])
+                # ВИПРАВЛЕНО: Використовуємо query
+                await remove_from_favorites_from_callback(query, context, fav['name'], fav['region'])
         except (ValueError, IndexError) as e:
             logger.error(f"Error removing from favorites: {e}")
             await query.answer("❌ Помилка при видаленні з улюблених")
     
     # Очищення улюблених
     elif data == 'clear_favorites':
-        await clear_favorites(update, context)
+        await clear_favorites_from_callback(query, context)
     
     # Обласні центри
     elif data.startswith('region_'):
@@ -453,14 +459,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             centers = settlements_db.get_regional_centers()
             if 0 <= index < len(centers):
                 center = centers[index]
-                await process_current_weather(update, context, center['name'], center['region'])
+                await process_current_weather_for_callback(query, context, center['name'], center['region'])
         except (ValueError, IndexError) as e:
             logger.error(f"Error processing region button: {e}")
             await query.answer("❌ Помилка обробки запиту")
     
     # Назад до меню
     elif data == 'back_to_menu':
-        await start_command(update, context)
+        await start_command_for_callback(query, context)
     
     # Новий пошук
     elif data == 'new_search':
@@ -476,7 +482,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if 'last_city' in context.user_data:
                 city = context.user_data['last_city']
                 region = context.user_data.get('last_region', '')
-                await process_current_weather(update, context, city, region)
+                await process_current_weather_for_callback(query, context, city, region)
             else:
                 await query.answer("❌ Немає даних для оновлення")
         except Exception as e:
@@ -775,30 +781,38 @@ async def process_current_weather(update: Update, context: ContextTypes.DEFAULT_
 async def process_3day_forecast(update: Update, context: ContextTypes.DEFAULT_TYPE, settlement_name: str, region: str):
     """Обробка запиту про прогноз на 3 дні"""
     try:
-        # Зберігаємо останнє місто для кнопки "Додати до улюблених"
-        context.user_data['last_city'] = settlement_name
-        context.user_data['last_region'] = region
+        # ВИПРАВЛЕНО: Визначаємо, чи це callback_query або звичайне повідомлення
+        is_callback = hasattr(update, 'callback_query')
         
-        if hasattr(update, 'edit_message_text'):
-            message = await update.edit_message_text(
+        if is_callback:
+            # Якщо це callback від інлайн-кнопки
+            query = update.callback_query
+            await query.edit_message_text(
                 f"📅 Отримую прогноз для {settlement_name} ({region})...", 
                 parse_mode='Markdown'
             )
+            message_to_edit = query.message
         else:
+            # Якщо це звичайне повідомлення
             message = await update.message.reply_text(
                 f"📅 Отримую прогноз для {settlement_name} ({region})...", 
                 parse_mode='Markdown'
             )
+            message_to_edit = message
+        
+        # Зберігаємо останнє місто для кнопки "Додати до улюблених"
+        context.user_data['last_city'] = settlement_name
+        context.user_data['last_region'] = region
         
         # Отримуємо координати
         lat, lon = settlements_db.get_coordinates(settlement_name, region)
         
         if not lat or not lon:
             error_msg = f"❌ Не знайдено координат для '{settlement_name}' ({region})"
-            if hasattr(message, 'edit_text'):
-                await message.edit_text(error_msg, parse_mode='Markdown')
+            if is_callback:
+                await update.callback_query.edit_message_text(error_msg, parse_mode='Markdown')
             else:
-                await update.reply_text(error_msg, parse_mode='Markdown')
+                await update.message.reply_text(error_msg, parse_mode='Markdown')
             return
         
         # Отримуємо погоду з прогнозом на 3 дні
@@ -812,10 +826,10 @@ async def process_3day_forecast(update: Update, context: ContextTypes.DEFAULT_TY
                 f"• Тимчасовий збій сервісу\n"
                 f"• Спробуйте через хвилину"
             )
-            if hasattr(message, 'edit_text'):
-                await message.edit_text(error_text, parse_mode='Markdown')
+            if is_callback:
+                await update.callback_query.edit_message_text(error_text, parse_mode='Markdown')
             else:
-                await update.reply_text(error_text, parse_mode='Markdown')
+                await update.message.reply_text(error_text, parse_mode='Markdown')
             return
         
         # Отримуємо 3 повідомлення з прогнозом
@@ -823,23 +837,39 @@ async def process_3day_forecast(update: Update, context: ContextTypes.DEFAULT_TY
         
         if not forecast_messages:
             error_text = f"❌ Помилка обробки прогнозу для {settlement_name}"
-            if hasattr(message, 'edit_text'):
-                await message.edit_text(error_text, parse_mode='Markdown')
+            if is_callback:
+                await update.callback_query.edit_message_text(error_text, parse_mode='Markdown')
             else:
-                await update.reply_text(error_text, parse_mode='Markdown')
+                await update.message.reply_text(error_text, parse_mode='Markdown')
             return
         
-        # Надсилаємо кожне повідомлення окремо
-        for i, forecast_text in enumerate(forecast_messages):
-            if i == 0:
-                # Перше повідомлення
-                if hasattr(message, 'edit_text'):
-                    await message.edit_text(forecast_text, parse_mode='Markdown')
-                else:
-                    await update.reply_text(forecast_text, parse_mode='Markdown')
+        # ВИПРАВЛЕНО: Надсилаємо прогноз правильно
+        if is_callback:
+            # Для callback: редагуємо перше повідомлення, інші відправляємо новими
+            await query.edit_message_text(forecast_messages[0], parse_mode='Markdown')
+            
+            # Відправляємо інші повідомлення
+            for forecast_text in forecast_messages[1:]:
+                await query.message.reply_text(forecast_text, parse_mode='Markdown')
+            
+            # Це для відправки кнопок після прогнозу
+            chat_for_buttons = query.message.chat
+            message_id_for_reply = query.message.message_id
+        else:
+            # Для звичайних повідомлень
+            if hasattr(message_to_edit, 'edit_text'):
+                # Редагуємо перше повідомлення
+                await message_to_edit.edit_text(forecast_messages[0], parse_mode='Markdown')
             else:
-                # Інші повідомлення
-                await update.reply_text(forecast_text, parse_mode='Markdown')
+                # Або відправляємо нове
+                await update.message.reply_text(forecast_messages[0], parse_mode='Markdown')
+            
+            # Відправляємо інші повідомлення
+            for forecast_text in forecast_messages[1:]:
+                await update.message.reply_text(forecast_text, parse_mode='Markdown')
+            
+            chat_for_buttons = update.message.chat
+            message_id_for_reply = None
         
         # Додаємо кнопки під останнім повідомленням
         keyboard = [
@@ -856,24 +886,32 @@ async def process_3day_forecast(update: Update, context: ContextTypes.DEFAULT_TY
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         # Надсилаємо повідомлення з кнопками
-        await update.reply_text(
-            "👇 *Оберіть дію:*",
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
+        if is_callback:
+            await query.message.reply_text(
+                "👇 *Оберіть дію:*",
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+        else:
+            await update.message.reply_text(
+                "👇 *Оберіть дію:*",
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
         
-        logger.info(f"3-day forecast sent for {settlement_name} ({region})")
+        logger.info(f"3-day forecast sent for {settlement_name} ({region}) via {'callback' if is_callback else 'message'}")
             
     except Exception as e:
-        logger.error(f"Error processing forecast request: {e}")
+        logger.error(f"Error processing forecast request: {e}", exc_info=True)
         error_msg = "❌ Виникла критична помилка. Спробуйте пізніше."
         
-        if hasattr(update, 'message'):
+        if hasattr(update, 'callback_query'):
+            try:
+                await update.callback_query.edit_message_text(error_msg, parse_mode='Markdown')
+            except:
+                await update.callback_query.answer(error_msg)
+        elif hasattr(update, 'message'):
             await update.message.reply_text(error_msg, parse_mode='Markdown')
-        elif hasattr(update, 'edit_message_text'):
-            await update.edit_message_text(error_msg, parse_mode='Markdown')
-        else:
-            await update.reply_text(error_msg, parse_mode='Markdown')
 
 # ============================================================================
 # ОБРОБНИК ПОМИЛОК
@@ -882,6 +920,251 @@ async def process_3day_forecast(update: Update, context: ContextTypes.DEFAULT_TY
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробник помилок"""
     logger.error(f"Bot error: {context.error}", exc_info=True)
+
+
+# ============================================================================
+# СПЕЦІАЛЬНІ ФУНКЦІЇ ДЛЯ ОБРОБКИ CALLBACK
+# ============================================================================
+
+async def process_current_weather_for_callback(query, context, settlement_name, region):
+    """Обробка погоди для callback запитів"""
+    try:
+        # Зберігаємо останнє місто
+        context.user_data['last_city'] = settlement_name
+        context.user_data['last_region'] = region
+        
+        # Редагуємо повідомлення
+        await query.edit_message_text(
+            f"🔍 Отримую погоду для {settlement_name} ({region})...", 
+            parse_mode='Markdown'
+        )
+        
+        # Отримуємо координати
+        lat, lon = settlements_db.get_coordinates(settlement_name, region)
+        
+        if not lat or not lon:
+            await query.edit_message_text(
+                f"❌ Не знайдено координат для '{settlement_name}' ({region})",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Отримуємо погоду
+        weather_data = weather_api.get_weather(lat, lon, forecast_days=1)
+        
+        if not weather_data:
+            error_text = (
+                f"❌ Не вдалося отримати погоду для {settlement_name} ({region})\n\n"
+                f"Можливі причини:\n"
+                f"• Проблеми з підключенням\n"
+                f"• Тимчасовий збій сервісу\n"
+                f"• Спробуйте через хвилину"
+            )
+            await query.edit_message_text(error_text, parse_mode='Markdown')
+            return
+        
+        # Форматуємо повідомлення
+        weather_text = weather_api.format_current_weather(settlement_name, region, weather_data)
+        
+        if not weather_text:
+            await query.edit_message_text(
+                f"❌ Помилка обробки даних для {settlement_name}",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Створюємо кнопки дій
+        keyboard = [
+            [
+                InlineKeyboardButton("📅 Прогноз на 3 дні", callback_data="forecast_city"),
+                InlineKeyboardButton("⭐️ Додати до улюблених", callback_data="add_fav")
+            ],
+            [
+                InlineKeyboardButton("🔄 Оновити", callback_data="refresh"),
+                InlineKeyboardButton("🔍 Новий пошук", callback_data="new_search")
+            ],
+            [
+                InlineKeyboardButton("↩️ Меню", callback_data="back_to_menu")
+            ]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            weather_text, 
+            parse_mode='Markdown', 
+            reply_markup=reply_markup
+        )
+        
+        logger.info(f"Weather sent via callback for {settlement_name} ({region})")
+            
+    except Exception as e:
+        logger.error(f"Error processing weather request from callback: {e}")
+        await query.edit_message_text(
+            "❌ Виникла критична помилка. Спробуйте пізніше.",
+            parse_mode='Markdown'
+        )
+
+async def process_3day_forecast_for_callback(query, context, settlement_name, region):
+    """Обробка прогнозу для callback запитів"""
+    try:
+        # Зберігаємо останнє місто
+        context.user_data['last_city'] = settlement_name
+        context.user_data['last_region'] = region
+        
+        # Редагуємо повідомлення
+        await query.edit_message_text(
+            f"📅 Отримую прогноз для {settlement_name} ({region})...", 
+            parse_mode='Markdown'
+        )
+        
+        # Отримуємо координати
+        lat, lon = settlements_db.get_coordinates(settlement_name, region)
+        
+        if not lat or not lon:
+            await query.edit_message_text(
+                f"❌ Не знайдено координат для '{settlement_name}' ({region})",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Отримуємо погоду з прогнозом на 3 дні
+        weather_data = weather_api.get_weather(lat, lon, forecast_days=3)
+        
+        if not weather_data:
+            error_text = (
+                f"❌ Не вдалося отримати прогноз для {settlement_name} ({region})\n\n"
+                f"Можливі причини:\n"
+                f"• Проблеми з підключенням\n"
+                f"• Тимчасовий збій сервісу\n"
+                f"• Спробуйте через хвилину"
+            )
+            await query.edit_message_text(error_text, parse_mode='Markdown')
+            return
+        
+        # Отримуємо 3 повідомлення з прогнозом
+        forecast_messages = weather_api.format_3day_forecast(settlement_name, region, weather_data)
+        
+        if not forecast_messages:
+            await query.edit_message_text(
+                f"❌ Помилка обробки прогнозу для {settlement_name}",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Надсилаємо перше повідомлення через редагування
+        await query.edit_message_text(forecast_messages[0], parse_mode='Markdown')
+        
+        # Надсилаємо інші повідомлення новими
+        for forecast_text in forecast_messages[1:]:
+            await query.message.reply_text(forecast_text, parse_mode='Markdown')
+        
+        # Додаємо кнопки під останнім повідомленням
+        keyboard = [
+            [
+                InlineKeyboardButton("🌤 Поточна погода", callback_data="current_city"),
+                InlineKeyboardButton("⭐️ Додати до улюблених", callback_data="add_fav")
+            ],
+            [
+                InlineKeyboardButton("🔍 Новий пошук", callback_data="new_search"),
+                InlineKeyboardButton("↩️ Меню", callback_data="back_to_menu")
+            ]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Надсилаємо повідомлення з кнопками
+        await query.message.reply_text(
+            "👇 *Оберіть дію:*",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+        
+        logger.info(f"3-day forecast sent via callback for {settlement_name} ({region})")
+            
+    except Exception as e:
+        logger.error(f"Error processing forecast request from callback: {e}")
+        await query.edit_message_text(
+            "❌ Виникла критична помилка. Спробуйте пізніше.",
+            parse_mode='Markdown'
+        )
+
+async def add_to_favorites_from_callback(query, context, settlement_name, region):
+    """Додати місто до улюблених з callback"""
+    favorites = context.user_data.get('favorites', [])
+    
+    # Перевіряємо, чи вже є в улюблених
+    for fav in favorites:
+        if fav['name'] == settlement_name and fav['region'] == region:
+            await query.answer("✅ Це місто вже в улюблених!")
+            return
+    
+    # Додаємо до улюблених
+    favorites.append({
+        'name': settlement_name,
+        'region': region
+    })
+    context.user_data['favorites'] = favorites
+    
+    await query.answer(f"✅ {settlement_name} додано до улюблених!")
+
+async def remove_from_favorites_from_callback(query, context, settlement_name, region):
+    """Видалити місто з улюблених з callback"""
+    favorites = context.user_data.get('favorites', [])
+    
+    # Шукаємо та видаляємо місто
+    new_favorites = []
+    removed = False
+    for fav in favorites:
+        if not (fav['name'] == settlement_name and fav['region'] == region):
+            new_favorites.append(fav)
+        else:
+            removed = True
+    
+    context.user_data['favorites'] = new_favorites
+    
+    if removed:
+        await query.answer(f"✅ {settlement_name} видалено з улюблених!")
+        # Показуємо оновлений список
+        await show_favorites(query, context)
+    else:
+        await query.answer("❌ Місто не знайдено в улюблених")
+
+async def clear_favorites_from_callback(query, context):
+    """Очистити улюблені міста з callback"""
+    context.user_data['favorites'] = []
+    await query.answer("✅ Улюблені міста очищено!")
+    await show_favorites(query, context)
+
+async def start_command_for_callback(query, context):
+    """Команда /start для callback"""
+    user = query.from_user
+    
+    welcome_text = (
+        f"👋 Вітаю, {user.first_name}!\n\n"
+        f"🇺🇦 *Український бот погоди*\n\n"
+        f"🌤 *Доступні функції:*\n"
+        f"• Пошук будь-якого населеного пункту України\n"
+        f"• Детальна інформація про погоду\n"
+        f"• Прогноз на 3 дні з почасовими даними\n"
+        f"• Всі обласні центри України\n"
+        f"• Збереження улюблених міст\n\n"
+        f"📊 *База даних:* {len(settlements_db.settlements)} населених пунктів\n\n"
+        f"👇 *Оберіть опцію з меню внизу:*"
+    )
+    
+    await query.edit_message_text(
+        welcome_text,
+        parse_mode='Markdown'
+    )
+    # Відправляємо нове повідомлення з клавіатурою
+    await query.message.reply_text(
+        "Оберіть опцію:",
+        reply_markup=get_main_keyboard()
+    )
+
+
+
 
 # ============================================================================
 # ГОЛОВНА ФУНКЦІЯ
