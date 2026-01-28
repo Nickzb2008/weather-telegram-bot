@@ -377,6 +377,86 @@ async def test_favorites(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_favorites(update, context)
 
 
+async def handle_favorite_city(query, context, settlement_name, region):
+    """Обробка вибору улюбленого міста"""
+    try:
+        # Редагуємо повідомлення
+        await query.edit_message_text(
+            f"🔍 Отримую погоду для {settlement_name} ({region})...", 
+            parse_mode='Markdown'
+        )
+        
+        # Зберігаємо останнє місто
+        context.user_data['last_city'] = settlement_name
+        context.user_data['last_region'] = region
+        
+        # Отримуємо координати
+        lat, lon = settlements_db.get_coordinates(settlement_name, region)
+        
+        if not lat or not lon:
+            await query.edit_message_text(
+                f"❌ Не знайдено координат для '{settlement_name}' ({region})",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Отримуємо погоду
+        weather_data = weather_api.get_weather(lat, lon, forecast_days=1)
+        
+        if not weather_data:
+            error_text = (
+                f"❌ Не вдалося отримати погоду для {settlement_name} ({region})\n\n"
+                f"Можливі причини:\n"
+                f"• Проблеми з підключенням\n"
+                f"• Тимчасовий збій сервісу\n"
+                f"• Спробуйте через хвилину"
+            )
+            await query.edit_message_text(error_text, parse_mode='Markdown')
+            return
+        
+        # Форматуємо повідомлення
+        weather_text = weather_api.format_current_weather(settlement_name, region, weather_data)
+        
+        if not weather_text:
+            await query.edit_message_text(
+                f"❌ Помилка обробки даних для {settlement_name}",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Створюємо кнопки
+        keyboard = [
+            [
+                InlineKeyboardButton("📅 Прогноз на 3 дні", callback_data="forecast_city"),
+                InlineKeyboardButton("⭐️ Додати до улюблених", callback_data="add_fav")
+            ],
+            [
+                InlineKeyboardButton("🔄 Оновити", callback_data="refresh"),
+                InlineKeyboardButton("🔍 Новий пошук", callback_data="new_search")
+            ],
+            [
+                InlineKeyboardButton("↩️ Меню", callback_data="back_to_menu")
+            ]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            weather_text, 
+            parse_mode='Markdown', 
+            reply_markup=reply_markup
+        )
+        
+        logger.info(f"Weather sent for favorite {settlement_name} ({region})")
+            
+    except Exception as e:
+        logger.error(f"Error processing favorite city: {e}", exc_info=True)
+        await query.edit_message_text(
+            "❌ Виникла критична помилка. Спробуйте пізніше.",
+            parse_mode='Markdown'
+        )
+
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробка натискання інлайн-кнопок"""
     query = update.callback_query
@@ -461,6 +541,30 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Error processing city button: {e}")
             await query.answer("❌ Помилка обробки запиту")
     
+    elif data.startswith('current_'):
+        try:
+            if data == 'current_city':
+                favorites = context.user_data.get('favorites', [])
+                if favorites:
+                    # Використовуємо перше місто з улюблених
+                    await handle_favorite_city(query, context, favorites[0]['name'], favorites[0]['region'])
+                else:
+                    await query.answer("❌ У вас немає улюблених міст")
+            else:
+                index = int(data.split('_')[1]) - 1
+                if 'last_search_results' in context.user_data:
+                    results = context.user_data['last_search_results']
+                    if 0 <= index < len(results):
+                        settlement = results[index]
+                        await handle_favorite_city(query, context, settlement['name'], settlement['region'])
+                    else:
+                        await query.answer("❌ Результати пошуку не знайдено")
+                else:
+                    await query.answer("❌ Спочатку виконайте пошук")
+        except (ValueError, IndexError) as e:
+            logger.error(f"Error processing current button: {e}")
+            await query.answer("❌ Помилка обробки запиту")
+
     # Додаємо в улюблені
     elif data == 'add_fav':
         try:
@@ -840,30 +944,41 @@ async def show_statistics(update: Update):
 async def process_current_weather(update: Update, context: ContextTypes.DEFAULT_TYPE, settlement_name: str, region: str):
     """Обробка запиту про поточну погоду"""
     try:
-        # Зберігаємо останнє місто для кнопки "Додати до улюблених"
-        context.user_data['last_city'] = settlement_name
-        context.user_data['last_region'] = region
+        # ВИЗНАЧАЄМО ТИП ЗАПИТУ
+        is_callback = hasattr(update, 'callback_query')
         
-        if hasattr(update, 'edit_message_text'):
-            message = await update.edit_message_text(
+        if is_callback:
+            # Якщо це callback від інлайн-кнопки
+            query = update.callback_query
+            chat = query.message.chat
+            # Редагуємо існуюче повідомлення
+            await query.edit_message_text(
                 f"🔍 Отримую погоду для {settlement_name} ({region})...", 
                 parse_mode='Markdown'
             )
+            message_to_edit = query.message
         else:
+            # Якщо це звичайне повідомлення
+            chat = update.message.chat
             message = await update.message.reply_text(
                 f"🔍 Отримую погоду для {settlement_name} ({region})...", 
                 parse_mode='Markdown'
             )
+            message_to_edit = message
+        
+        # Зберігаємо останнє місто для кнопки "Додати до улюблених"
+        context.user_data['last_city'] = settlement_name
+        context.user_data['last_region'] = region
         
         # Отримуємо координати
         lat, lon = settlements_db.get_coordinates(settlement_name, region)
         
         if not lat or not lon:
             error_msg = f"❌ Не знайдено координат для '{settlement_name}' ({region})"
-            if hasattr(message, 'edit_text'):
-                await message.edit_text(error_msg, parse_mode='Markdown')
+            if is_callback:
+                await update.callback_query.edit_message_text(error_msg, parse_mode='Markdown')
             else:
-                await update.reply_text(error_msg, parse_mode='Markdown')
+                await update.message.reply_text(error_msg, parse_mode='Markdown')
             return
         
         # Отримуємо погоду
@@ -877,10 +992,10 @@ async def process_current_weather(update: Update, context: ContextTypes.DEFAULT_
                 f"• Тимчасовий збій сервісу\n"
                 f"• Спробуйте через хвилину"
             )
-            if hasattr(message, 'edit_text'):
-                await message.edit_text(error_text, parse_mode='Markdown')
+            if is_callback:
+                await update.callback_query.edit_message_text(error_text, parse_mode='Markdown')
             else:
-                await update.reply_text(error_text, parse_mode='Markdown')
+                await update.message.reply_text(error_text, parse_mode='Markdown')
             return
         
         # Форматуємо повідомлення
@@ -888,10 +1003,10 @@ async def process_current_weather(update: Update, context: ContextTypes.DEFAULT_
         
         if not weather_text:
             error_text = f"❌ Помилка обробки даних для {settlement_name}"
-            if hasattr(message, 'edit_text'):
-                await message.edit_text(error_text, parse_mode='Markdown')
+            if is_callback:
+                await update.callback_query.edit_message_text(error_text, parse_mode='Markdown')
             else:
-                await update.reply_text(error_text, parse_mode='Markdown')
+                await update.message.reply_text(error_text, parse_mode='Markdown')
             return
         
         # Створюємо кнопки дій
@@ -911,23 +1026,41 @@ async def process_current_weather(update: Update, context: ContextTypes.DEFAULT_
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        if hasattr(message, 'edit_text'):
-            await message.edit_text(weather_text, parse_mode='Markdown', reply_markup=reply_markup)
+        # ВІДПРАВЛЯЄМО РЕЗУЛЬТАТ
+        if is_callback:
+            await query.edit_message_text(
+                weather_text, 
+                parse_mode='Markdown', 
+                reply_markup=reply_markup
+            )
         else:
-            await update.reply_text(weather_text, parse_mode='Markdown', reply_markup=reply_markup)
+            await update.message.reply_text(
+                weather_text, 
+                parse_mode='Markdown', 
+                reply_markup=reply_markup
+            )
         
-        logger.info(f"Weather sent for {settlement_name} ({region})")
+        logger.info(f"Weather sent for {settlement_name} ({region}) via {'callback' if is_callback else 'message'}")
             
     except Exception as e:
-        logger.error(f"Error processing weather request: {e}")
+        logger.error(f"Error processing weather request: {e}", exc_info=True)
         error_msg = "❌ Виникла критична помилка. Спробуйте пізніше."
         
-        if hasattr(update, 'message'):
+        # ВИПРАВЛЕНО: Обробка помилок для обох типів запитів
+        if hasattr(update, 'callback_query'):
+            try:
+                await update.callback_query.edit_message_text(error_msg, parse_mode='Markdown')
+            except:
+                await update.callback_query.answer(error_msg)
+        elif hasattr(update, 'message'):
             await update.message.reply_text(error_msg, parse_mode='Markdown')
-        elif hasattr(update, 'edit_message_text'):
-            await update.edit_message_text(error_msg, parse_mode='Markdown')
         else:
-            await update.reply_text(error_msg, parse_mode='Markdown')
+            # Якщо нічого не працює, спробуємо надіслати через chat
+            try:
+                if 'chat' in locals():
+                    await chat.send_message(error_msg, parse_mode='Markdown')
+            except:
+                pass
 
 async def process_3day_forecast(update: Update, context: ContextTypes.DEFAULT_TYPE, settlement_name: str, region: str):
     """Обробка запиту про прогноз на 3 дні"""
@@ -1392,7 +1525,7 @@ def main():
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("debug", debug_context))  # Додайте цей рядок
         application.add_handler(CommandHandler("testfav", test_favorites))
-        
+
 
         # Обробник кнопок меню
         application.add_handler(MessageHandler(
