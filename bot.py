@@ -913,20 +913,51 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================================================
 
 def main():
-    """Запуск бота"""
+    """Запуск бота з вимкненою обробкою сигналів"""
     try:
         print("🚀 Creating Telegram application...")
         
         # Створюємо event loop
+        import asyncio
+        import signal
+        
+        # Створюємо новий loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        # Додатково вимикаємо обробку сигналів
+        # Вимикаємо обробку сигналів ДО створення application
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
                 loop.remove_signal_handler(sig)
             except:
                 pass
+        
+        # Монопатч для telegram бібліотеки
+        import telegram.ext._application
+        
+        # Зберігаємо оригінальний метод
+        original_run = telegram.ext._application.Application._Application__run
+        
+        # Створюємо патчовану версію
+        def patched_run(self, *args, **kwargs):
+            # Вимикаємо додавання обробників сигналів
+            import asyncio
+            loop = asyncio.get_event_loop()
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                try:
+                    loop.remove_signal_handler(sig)
+                except:
+                    pass
+            
+            # Викликаємо оригінальний метод без сигналів
+            try:
+                loop.add_signal_handler = lambda *args, **kwargs: None
+                return original_run(self, *args, **kwargs)
+            except Exception as e:
+                raise e
+        
+        # Застосовуємо патч
+        telegram.ext._application.Application._Application__run = patched_run
         
         application = Application.builder().token(TELEGRAM_TOKEN).build()
         
@@ -951,13 +982,13 @@ def main():
         print("✅ Open-Meteo API: Ready")
         print("🚀 Starting bot polling...")
         
-        # Запускаємо з вимкненими сигналами
+        # Запускаємо бота
         loop.run_until_complete(application.run_polling(
             drop_pending_updates=True,
             timeout=30,
             pool_timeout=30,
             allowed_updates=None,
-            close_loop=False  # Не закривати loop після зупинки
+            close_loop=False
         ))
         
     except Exception as e:
