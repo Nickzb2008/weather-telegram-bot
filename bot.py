@@ -901,6 +901,4 @@ def main():
     sys.exit(1)
 
 if __name__ == '__main__':
-    print("⚠️  Запускайте бота через main.py")
-    print("Використання: python main.py")
-    sys.exit(1)
+    main()
