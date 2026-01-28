@@ -121,6 +121,30 @@ class WeatherAPI:
         }
         return emoji_codes.get(weather_code, "❓")
     
+    def calculate_cloud_base(self, temperature: float, humidity: float) -> Optional[int]:
+        """Розрахувати нижню кромку хмар"""
+        if temperature is None or humidity is None:
+            return None
+        
+        t = temperature
+        rh = humidity
+        
+        # Формула Магнуса для точки роси
+        a = 17.27
+        b = 237.7
+        alpha = ((a * t) / (b + t)) + math.log(rh / 100.0)
+        dew_point = (b * alpha) / (a - alpha)
+        
+        # Формула для висоти хмар (метри)
+        cloud_base = 125 * (t - dew_point)
+        
+        # Обмеження
+        if cloud_base < 100:
+            return 100
+        elif cloud_base > 5000:
+            return 5000
+        return int(cloud_base)
+    
     def format_current_weather(self, settlement_name: str, region: str, weather_data: dict) -> str:
         """Форматувати повідомлення про поточну погоду"""
         try:
