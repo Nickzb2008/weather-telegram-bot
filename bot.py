@@ -364,49 +364,63 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     data = query.data
     
-    # ВИПРАВЛЕНО: Додаємо збереження query для подальшого використання
-    context.user_data['last_callback_query'] = query
-    
-    # Спрощена обробка для current_
+    # ВИПРАВЛЕНО: Обробка основних кнопок
     if data.startswith('current_'):
         try:
             if data == 'current_city':
                 # Обробляємо випадок з улюблених міст
                 favorites = context.user_data.get('favorites', [])
                 if favorites:
-                    # ВИПРАВЛЕНО: Використовуємо query для отримання update
-                    await process_current_weather_for_callback(query, context, favorites[0]['name'], favorites[0]['region'])
+                    # Створюємо імітацію update з callback_query
+                    from telegram import Update
+                    fake_update = Update(update_id=update.update_id, callback_query=query)
+                    await process_current_weather(fake_update, context, favorites[0]['name'], favorites[0]['region'])
+                else:
+                    await query.answer("❌ У вас немає улюблених міст")
             else:
                 index = int(data.split('_')[1]) - 1
                 if 'last_search_results' in context.user_data:
                     results = context.user_data['last_search_results']
                     if 0 <= index < len(results):
                         settlement = results[index]
-                        await process_current_weather_for_callback(query, context, settlement['name'], settlement['region'])
+                        from telegram import Update
+                        fake_update = Update(update_id=update.update_id, callback_query=query)
+                        await process_current_weather(fake_update, context, settlement['name'], settlement['region'])
+                    else:
+                        await query.answer("❌ Результати пошуку не знайдено")
+                else:
+                    await query.answer("❌ Спочатку виконайте пошук")
         except (ValueError, IndexError) as e:
             logger.error(f"Error processing current button: {e}")
             await query.answer("❌ Помилка обробки запиту")
     
-    # Спрощена обробка для forecast_
     elif data.startswith('forecast_'):
         try:
             if data == 'forecast_city':
-                # Обробляємо випадок з улюблених міст
                 favorites = context.user_data.get('favorites', [])
                 if favorites:
-                    await process_3day_forecast_for_callback(query, context, favorites[0]['name'], favorites[0]['region'])
+                    from telegram import Update
+                    fake_update = Update(update_id=update.update_id, callback_query=query)
+                    await process_3day_forecast(fake_update, context, favorites[0]['name'], favorites[0]['region'])
+                else:
+                    await query.answer("❌ У вас немає улюблених міст")
             else:
                 index = int(data.split('_')[1]) - 1
                 if 'last_search_results' in context.user_data:
                     results = context.user_data['last_search_results']
                     if 0 <= index < len(results):
                         settlement = results[index]
-                        await process_3day_forecast_for_callback(query, context, settlement['name'], settlement['region'])
+                        from telegram import Update
+                        fake_update = Update(update_id=update.update_id, callback_query=query)
+                        await process_3day_forecast(fake_update, context, settlement['name'], settlement['region'])
+                    else:
+                        await query.answer("❌ Результати пошуку не знайдено")
+                else:
+                    await query.answer("❌ Спочатку виконайте пошук")
         except (ValueError, IndexError) as e:
             logger.error(f"Error processing forecast button: {e}")
             await query.answer("❌ Помилка обробки запиту")
     
-    # Обробка для city_
     elif data.startswith('city_'):
         try:
             index = int(data.split('_')[1]) - 1
@@ -414,7 +428,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 results = context.user_data['last_search_results']
                 if 0 <= index < len(results):
                     settlement = results[index]
-                    await process_current_weather_for_callback(query, context, settlement['name'], settlement['region'])
+                    from telegram import Update
+                    fake_update = Update(update_id=update.update_id, callback_query=query)
+                    await process_current_weather(fake_update, context, settlement['name'], settlement['region'])
+                else:
+                    await query.answer("❌ Результати пошуку не знайдено")
+            else:
+                await query.answer("❌ Спочатку виконайте пошук")
         except (ValueError, IndexError) as e:
             logger.error(f"Error processing city button: {e}")
             await query.answer("❌ Помилка обробки запиту")
@@ -426,8 +446,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if 'last_city' in context.user_data and 'last_region' in context.user_data:
                 settlement_name = context.user_data['last_city']
                 region = context.user_data['last_region']
-                # ВИПРАВЛЕНО: Використовуємо спеціальну функцію для callback
-                await add_to_favorites_from_callback(query, context, settlement_name, region)
+                
+                # Перевіряємо, чи вже є в улюблених
+                favorites = context.user_data.get('favorites', [])
+                for fav in favorites:
+                    if fav['name'] == settlement_name and fav['region'] == region:
+                        await query.answer("✅ Це місто вже в улюблених!")
+                        return
+                
+                # Додаємо до улюблених
+                favorites.append({
+                    'name': settlement_name,
+                    'region': region
+                })
+                context.user_data['favorites'] = favorites
+                
+                await query.answer(f"✅ {settlement_name} додано до улюблених!")
             else:
                 await query.answer("❌ Не вдалося додати до улюблених. Спочатку знайдіть місто.")
         except Exception as e:
@@ -442,15 +476,43 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             favorites = context.user_data.get('favorites', [])
             if 0 <= fav_index < len(favorites):
                 fav = favorites[fav_index]
-                # ВИПРАВЛЕНО: Використовуємо query
-                await remove_from_favorites_from_callback(query, context, fav['name'], fav['region'])
+                # Шукаємо та видаляємо місто
+                new_favorites = []
+                removed = False
+                for favorite in favorites:
+                    if not (favorite['name'] == fav['name'] and favorite['region'] == fav['region']):
+                        new_favorites.append(favorite)
+                    else:
+                        removed = True
+                
+                context.user_data['favorites'] = new_favorites
+                
+                if removed:
+                    await query.answer(f"✅ {fav['name']} видалено з улюблених!")
+                    # Показуємо оновлений список
+                    await show_favorites(query, context)
+                else:
+                    await query.answer("❌ Місто не знайдено в улюблених")
+            else:
+                await query.answer("❌ Неправильний індекс улюбленого")
         except (ValueError, IndexError) as e:
             logger.error(f"Error removing from favorites: {e}")
             await query.answer("❌ Помилка при видаленні з улюблених")
     
     # Очищення улюблених
     elif data == 'clear_favorites':
-        await clear_favorites_from_callback(query, context)
+        try:
+            favorites = context.user_data.get('favorites', [])
+            if favorites:
+                context.user_data['favorites'] = []
+                await query.answer("✅ Улюблені міста очищено!")
+                # Показуємо порожній список
+                await show_favorites(query, context)
+            else:
+                await query.answer("✅ Улюблених міст і так немає")
+        except Exception as e:
+            logger.error(f"Error clearing favorites: {e}")
+            await query.answer("❌ Помилка очищення улюблених")
     
     # Обласні центри
     elif data.startswith('region_'):
@@ -459,22 +521,64 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             centers = settlements_db.get_regional_centers()
             if 0 <= index < len(centers):
                 center = centers[index]
-                await process_current_weather_for_callback(query, context, center['name'], center['region'])
+                from telegram import Update
+                fake_update = Update(update_id=update.update_id, callback_query=query)
+                await process_current_weather(fake_update, context, center['name'], center['region'])
+            else:
+                await query.answer("❌ Неправильний індекс обласного центру")
         except (ValueError, IndexError) as e:
             logger.error(f"Error processing region button: {e}")
             await query.answer("❌ Помилка обробки запиту")
     
     # Назад до меню
     elif data == 'back_to_menu':
-        await start_command_for_callback(query, context)
+        try:
+            user = query.from_user
+            welcome_text = (
+                f"👋 Вітаю, {user.first_name}!\n\n"
+                f"🇺🇦 *Український бот погоди*\n\n"
+                f"🌤 *Доступні функції:*\n"
+                f"• Пошук будь-якого населеного пункту України\n"
+                f"• Детальна інформація про погоду\n"
+                f"• Прогноз на 3 дні з почасовими даними\n"
+                f"• Всі обласні центри України\n"
+                f"• Збереження улюблених міст\n\n"
+                f"📊 *База даних:* {len(settlements_db.settlements)} населених пунктів\n\n"
+                f"👇 *Оберіть опцію з меню внизу:*"
+            )
+            
+            await query.edit_message_text(
+                welcome_text,
+                parse_mode='Markdown'
+            )
+            
+            # Відправляємо нове повідомлення з клавіатурою
+            await query.message.reply_text(
+                "Оберіть опцію:",
+                reply_markup=get_main_keyboard()
+            )
+            
+        except Exception as e:
+            logger.error(f"Error going back to menu: {e}")
+            await query.answer("❌ Помилка повернення до меню")
     
     # Новий пошук
     elif data == 'new_search':
-        await query.edit_message_text(
-            "🔍 *Введіть назву населеного пункту для пошуку:*",
-            parse_mode='Markdown'
-        )
-        context.user_data['awaiting_city_for'] = 'search'
+        try:
+            await query.edit_message_text(
+                "🔍 *Введіть назву населеного пункту для пошуку:*",
+                parse_mode='Markdown'
+            )
+            # Встановлюємо прапор, що очікуємо введення міста
+            context.user_data['awaiting_city_for'] = 'search'
+            # Відправляємо клавіатуру з кнопкою Назад
+            await query.message.reply_text(
+                "Або натисніть кнопку Назад:",
+                reply_markup=get_back_keyboard()
+            )
+        except Exception as e:
+            logger.error(f"Error starting new search: {e}")
+            await query.answer("❌ Помилка початку нового пошуку")
     
     # Оновлення погоди
     elif data == 'refresh':
@@ -482,9 +586,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if 'last_city' in context.user_data:
                 city = context.user_data['last_city']
                 region = context.user_data.get('last_region', '')
-                await process_current_weather_for_callback(query, context, city, region)
+                from telegram import Update
+                fake_update = Update(update_id=update.update_id, callback_query=query)
+                await process_current_weather(fake_update, context, city, region)
             else:
-                await query.answer("❌ Немає даних для оновлення")
+                await query.answer("❌ Немає даних для оновлення. Спочатку знайдіть місто.")
         except Exception as e:
             logger.error(f"Error refreshing weather: {e}")
             await query.answer("❌ Помилка оновлення погоди")
@@ -535,26 +641,36 @@ async def show_regional_centers(update: Update, context: ContextTypes.DEFAULT_TY
 # УЛЮБЛЕНІ МІСТА
 # ============================================================================
 
-async def show_favorites(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показати улюблені міста"""
+async def show_favorites(update_or_query, context: ContextTypes.DEFAULT_TYPE):
+    """Показати улюблені міста (працює зі звичайним update або query)"""
+    # Визначаємо, що ми отримали: update чи query
+    if hasattr(update_or_query, 'callback_query'):
+        # Якщо це query з callback
+        query = update_or_query.callback_query
+        message_func = query.edit_message_text
+        has_message = True
+    elif hasattr(update_or_query, 'edit_message_text'):
+        # Якщо це напряму query
+        query = update_or_query
+        message_func = query.edit_message_text
+        has_message = True
+    else:
+        # Якщо це звичайний update
+        update = update_or_query
+        message_func = update.message.reply_text if hasattr(update, 'message') else update.reply_text
+        has_message = hasattr(update, 'message')
+    
     favorites = context.user_data.get('favorites', [])
     
     if not favorites:
-        if hasattr(update, 'message'):
-            await update.message.reply_text(
-                "⭐️ *Улюблені міста*\n\n"
-                "У вас ще немає улюблених міст.\n\n"
-                "Додайте місто до улюблених, щоб швидко отримувати погоду.",
-                parse_mode='Markdown',
-                reply_markup=get_main_keyboard()
-            )
-        else:
-            await update.edit_message_text(
-                "⭐️ *Улюблені міста*\n\n"
-                "У вас ще немає улюблених міст.\n\n"
-                "Додайте місто до улюблених, щоб швидко отримувати погоду.",
-                parse_mode='Markdown'
-            )
+        text = (
+            "⭐️ *Улюблені міста*\n\n"
+            "У вас ще немає улюблених міст.\n\n"
+            "Додайте місто до улюблених, щоб швидко отримувати погоду."
+        )
+        
+        if has_message:
+            await message_func(text, parse_mode='Markdown')
         return
     
     favorites_text = "⭐️ *Ваші улюблені міста:*\n\n"
@@ -563,12 +679,15 @@ async def show_favorites(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Створюємо кнопки
     keyboard = []
-    for i, fav in enumerate(favorites, 1):
+    for i, fav in enumerate(favorites[:5], 1):  # Обмежуємо 5 містами
         row = [
             InlineKeyboardButton(f"🌤 {fav['name']}", callback_data=f"current_{i}"),
             InlineKeyboardButton("🗑", callback_data=f"remove_fav_{i}")
         ]
         keyboard.append(row)
+    
+    if len(favorites) > 5:
+        keyboard.append([InlineKeyboardButton("📄 Показати ще", callback_data="show_more_favs")])
     
     keyboard.append([InlineKeyboardButton("🗑 Очистити улюблені", callback_data="clear_favorites")])
     keyboard.append([InlineKeyboardButton("↩️ Назад", callback_data="back_to_menu")])
@@ -579,14 +698,8 @@ async def show_favorites(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['last_search_results'] = favorites
     context.user_data['last_search_action'] = 'current'
     
-    if hasattr(update, 'message'):
-        await update.message.reply_text(
-            favorites_text + "\n👇 *Оберіть місто:*",
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-    else:
-        await update.edit_message_text(
+    if has_message:
+        await message_func(
             favorites_text + "\n👇 *Оберіть місто:*",
             parse_mode='Markdown',
             reply_markup=reply_markup
