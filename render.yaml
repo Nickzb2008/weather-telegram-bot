@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: ukraine-weather-bot
+    name: ukraine-weather-bot-web
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: python app.py
@@ -11,3 +11,13 @@ services:
         value: 10000
     autoDeploy: true
     healthCheckPath: /health
+  
+  - type: worker
+    name: ukraine-weather-bot-worker
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python worker.py
+    envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false
+    autoDeploy: true

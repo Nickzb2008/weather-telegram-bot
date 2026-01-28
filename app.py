@@ -1,6 +1,5 @@
 # app.py - Веб-сервер для Render
 from flask import Flask, jsonify
-import threading
 import os
 import logging
 
@@ -47,21 +46,7 @@ def get_current_timestamp():
     from datetime import datetime
     return datetime.now().isoformat()
 
-def run_bot():
-    """Запустити бота в окремому потоці"""
-    try:
-        logger.info("Starting Telegram bot...")
-        # Імпортуємо та запускаємо бота
-        from bot import main
-        main()
-    except Exception as e:
-        logger.error(f"Error starting bot: {e}")
-
 if __name__ == '__main__':
-    # Запускаємо бота в окремому потоці
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-    
     # Запускаємо веб-сервер
     port = int(os.getenv('PORT', 10000))
     logger.info(f"Starting web server on port {port}")
