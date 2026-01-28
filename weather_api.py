@@ -22,13 +22,13 @@ class WeatherAPI:
             logger.warning("⚠️ Altitude wind data will be estimated only")
         else:
             logger.info("✅ OpenWeatherMap API key found")
-        
+    
     def get_weather(self, lat: float, lon: float, forecast_days: int = 3) -> Optional[dict]:
         """Отримати погоду з Open-Meteo API та висотний вітер з OpenWeatherMap"""
         logger.info(f"🌤 Getting weather for lat={lat}, lon={lon}, days={forecast_days}")
         
         # Отримуємо основні дані погоди з Open-Meteo
-        open_meteo_data = self._get_open_meteo_weather(lat, lon, forecast_days)
+        open_meteo_data = self.get_open_meteo_weather(lat, lon, forecast_days)
         
         if not open_meteo_data:
             logger.error("❌ Failed to get Open-Meteo data")
@@ -50,6 +50,47 @@ class WeatherAPI:
         
         logger.info(f"✅ Weather data ready with {len(altitude_wind_data)} altitude levels")
         return open_meteo_data
+    
+    def get_open_meteo_weather(self, lat: float, lon: float, forecast_days: int) -> Optional[dict]:
+        """Отримати основні дані погоди з Open-Meteo"""
+        try:
+            params = {
+                'latitude': lat,
+                'longitude': lon,
+                'current': [
+                    'temperature_2m', 'relative_humidity_2m', 'apparent_temperature',
+                    'precipitation', 'weather_code', 'pressure_msl', 
+                    'wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m'
+                ],
+                'hourly': [
+                    'temperature_2m', 'precipitation_probability',
+                    'precipitation', 'weather_code',
+                    'wind_speed_10m', 'wind_direction_10m'
+                ],
+                'daily': [
+                    'temperature_2m_max', 'temperature_2m_min',
+                    'precipitation_sum', 'precipitation_hours',
+                    'weather_code', 'sunrise', 'sunset',
+                    'wind_speed_10m_max', 'wind_gusts_10m_max',
+                    'wind_direction_10m_dominant'
+                ],
+                'timezone': 'auto',
+                'forecast_days': forecast_days
+            }
+            
+            response = requests.get(self.open_meteo_url, params=params, timeout=15)
+            
+            if response.status_code == 200:
+                data = response.json()
+                logger.info("✅ Open-Meteo data received")
+                return data
+            else:
+                logger.error(f"❌ Open-Meteo error: {response.status_code}")
+                
+        except Exception as e:
+            logger.error(f"❌ Open-Meteo request error: {e}")
+        
+        return None
     
     def _get_openweathermap_altitude_wind(self, lat: float, lon: float) -> List[Dict]:
         """Отримати висотний вітер з OpenWeatherMap API"""
@@ -118,8 +159,6 @@ class WeatherAPI:
             wind_data = []
             
             # У версії 3.0 можемо отримати дані для різних висот через окремий запит
-            # Для отримання висотного вітру потрібен окремий запит з параметром 'vertical_velocity'
-            
             # Спочатку отримуємо поточні дані
             current = data.get('current', {})
             
@@ -130,7 +169,6 @@ class WeatherAPI:
                 
                 logger.info(f"🌬 OpenWeatherMap current wind: {wind_speed} m/s, {wind_deg}°")
                 
-                # Отримуємо додаткові дані про вітер на різних висотах
                 # Створюємо модель висотного вітру на основі поточних даних
                 return self._create_altitude_wind_model(wind_speed, wind_deg, wind_gust, lat, lon)
             
@@ -246,8 +284,6 @@ class WeatherAPI:
         except Exception as e:
             logger.error(f"❌ Error estimating altitude wind: {e}")
             return []
-    
-    # Решта методів залишаються незмінними (get_wind_direction, format_current_weather тощо)
     
     def get_wind_direction(self, degrees: float) -> str:
         """Конвертувати градуси у назву напрямку вітру"""
