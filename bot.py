@@ -1,6 +1,3 @@
-import signal
-signal.signal(signal.SIGINT, signal.SIG_IGN)
-signal.signal(signal.SIGTERM, signal.SIG_IGN)
 import os
 import logging
 import sys
@@ -9,31 +6,6 @@ from datetime import datetime
 import asyncio
 from typing import Dict, List, Optional, Tuple
 import math
-
-# ============================================================================
-# ФІКС ДЛЯ ASYNCIO В ПОТОКАХ
-# ============================================================================
-
-import asyncio
-import signal
-
-def _disable_signal_handlers():
-    """Вимкнути обробку сигналів для уникнення помилок у потоках"""
-    # Вимкнути стандартні обробники сигналів
-    try:
-        import asyncio
-        loop = asyncio.get_event_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                loop.remove_signal_handler(sig)
-            except (NotImplementedError, ValueError):
-                # Якщо не підтримується - ігноруємо
-                pass
-    except:
-        pass
-
-# Викликаємо при імпорті
-_disable_signal_handlers()
 
 
 
@@ -915,89 +887,20 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ГОЛОВНА ФУНКЦІЯ
 # ============================================================================
 
+# Замініть всю функцію main() на:
+
+async def run_bot():
+    """Запуск бота для імпорту з main.py"""
+    # Ця функція тепер не використовується напряму
+    pass
+
 def main():
-    """Запуск бота з вимкненою обробкою сигналів"""
-    try:
-        print("🚀 Creating Telegram application...")
-        
-        # Створюємо event loop
-        import asyncio
-        import signal
-        
-        # Створюємо новий loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        # Вимикаємо обробку сигналів ДО створення application
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                loop.remove_signal_handler(sig)
-            except:
-                pass
-        
-        # Монопатч для telegram бібліотеки
-        import telegram.ext._application
-        
-        # Зберігаємо оригінальний метод
-        original_run = telegram.ext._application.Application._Application__run
-        
-        # Створюємо патчовану версію
-        def patched_run(self, *args, **kwargs):
-            # Вимикаємо додавання обробників сигналів
-            import asyncio
-            loop = asyncio.get_event_loop()
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                try:
-                    loop.remove_signal_handler(sig)
-                except:
-                    pass
-            
-            # Викликаємо оригінальний метод без сигналів
-            try:
-                loop.add_signal_handler = lambda *args, **kwargs: None
-                return original_run(self, *args, **kwargs)
-            except Exception as e:
-                raise e
-        
-        # Застосовуємо патч
-        telegram.ext._application.Application._Application__run = patched_run
-        
-        application = Application.builder().token(TELEGRAM_TOKEN).build()
-        
-        # Додавання обробників команд
-        application.add_handler(CommandHandler("start", start_command))
-        application.add_handler(CommandHandler("help", help_command))
-        
-        # Обробник кнопок меню
-        application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^(🌤|📅|🔍|🏙|⭐️|📊|❓|↩️)'), handle_menu_button))
-        
-        # Обробник інлайн-кнопок
-        application.add_handler(CallbackQueryHandler(button_handler))
-        
-        # Обробник текстових повідомлень
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        
-        # Обробник помилок
-        application.add_error_handler(error_handler)
-        
-        print("✅ Application created")
-        print(f"✅ Database loaded: {len(settlements_db.settlements)} settlements")
-        print("✅ Open-Meteo API: Ready")
-        print("🚀 Starting bot polling...")
-        
-        # Запускаємо бота
-        loop.run_until_complete(application.run_polling(
-            drop_pending_updates=True,
-            timeout=30,
-            pool_timeout=30,
-            allowed_updates=None,
-            close_loop=False
-        ))
-        
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        logger.error(f"Application error: {e}")
-        raise
+    """Застаріла функція - використовуйте main.py"""
+    print("⚠️  Ця функція застаріла. Використовуйте main.py")
+    print("Запускайте через: python main.py")
+    sys.exit(1)
 
 if __name__ == '__main__':
-    main()
+    print("⚠️  Запускайте бота через main.py")
+    print("Використання: python main.py")
+    sys.exit(1)
