@@ -44,11 +44,15 @@ class WeatherAPI:
             logger.info("🔄 OpenWeatherMap failed or no key, estimating altitude wind")
             altitude_wind_data = self._estimate_altitude_wind_from_surface(open_meteo_data)
         
-        # Додаємо дані про висотний вітер
+        # Розраховуємо кромку хмар на основі вологості та температури
+        cloud_base_data = self._calculate_cloud_base(open_meteo_data)
+        
+        # Додаємо дані про висотний вітер та кромку хмар
         open_meteo_data['altitude_wind'] = altitude_wind_data
+        open_meteo_data['cloud_base'] = cloud_base_data
         open_meteo_data['openweathermap_used'] = bool(altitude_wind_data and self.openweathermap_key)
         
-        logger.info(f"✅ Weather data ready with {len(altitude_wind_data)} altitude levels")
+        logger.info(f"✅ Weather data ready with {len(altitude_wind_data)} altitude levels and cloud base")
         return open_meteo_data
     
     def get_open_meteo_weather(self, lat: float, lon: float, forecast_days: int) -> Optional[dict]:
@@ -60,19 +64,22 @@ class WeatherAPI:
                 'current': [
                     'temperature_2m', 'relative_humidity_2m', 'apparent_temperature',
                     'precipitation', 'weather_code', 'pressure_msl', 
-                    'wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m'
+                    'wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m',
+                    'cloud_cover'
                 ],
                 'hourly': [
                     'temperature_2m', 'precipitation_probability',
                     'precipitation', 'weather_code',
-                    'wind_speed_10m', 'wind_direction_10m'
+                    'wind_speed_10m', 'wind_direction_10m',
+                    'cloud_cover', 'relative_humidity_2m'
                 ],
                 'daily': [
                     'temperature_2m_max', 'temperature_2m_min',
                     'precipitation_sum', 'precipitation_hours',
                     'weather_code', 'sunrise', 'sunset',
                     'wind_speed_10m_max', 'wind_gusts_10m_max',
-                    'wind_direction_10m_dominant'
+                    'wind_direction_10m_dominant',
+                    'cloud_cover_mean'
                 ],
                 'timezone': 'auto',
                 'forecast_days': forecast_days
@@ -91,6 +98,69 @@ class WeatherAPI:
             logger.error(f"❌ Open-Meteo request error: {e}")
         
         return None
+    
+    def _calculate_cloud_base(self, weather_data: dict) -> Dict:
+        """Розрахувати висоту кромки хмар на основі температури та вологості"""
+        try:
+            current = weather_data.get('current', {})
+            temperature = current.get('temperature_2m', 20)  # температура у градусах Цельсія
+            humidity = current.get('relative_humidity_2m', 60)  # відносна вологість у відсотках
+            cloud_cover = current.get('cloud_cover', 50)  # хмарність у відсотках
+            
+            # Розрахунок точки роси (Dew Point) у градусах Цельсія
+            # Формула Магнуса-Тетенса
+            alpha = 17.27
+            beta = 237.7
+            
+            gamma = (alpha * temperature) / (beta + temperature) + math.log(humidity / 100.0)
+            dew_point = (beta * gamma) / (alpha - gamma)
+            
+            # Розрахунок висоти кромки хмар (метри)
+            # Проста формула: H = 125 * (T - Td), де T - температура, Td - точка роси
+            cloud_base = 125 * (temperature - dew_point)
+            
+            # Обмежуємо значення в межах реалістичних меж
+            cloud_base = max(100, min(cloud_base, 5000))  # від 100 до 5000 метрів
+            
+            # Визначаємо тип хмарності на основі висоти
+            cloud_type = self._get_cloud_type_by_height(cloud_base, cloud_cover)
+            
+            return {
+                'height': round(cloud_base),
+                'dew_point': round(dew_point, 1),
+                'temperature': round(temperature, 1),
+                'humidity': humidity,
+                'cloud_cover': cloud_cover,
+                'cloud_type': cloud_type,
+                'calculation_method': 'Магнуса-Тетенса'
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error calculating cloud base: {e}")
+            return {
+                'height': 1000,
+                'dew_point': 10,
+                'temperature': 20,
+                'humidity': 60,
+                'cloud_cover': 50,
+                'cloud_type': 'Середні',
+                'calculation_method': 'Стандартна',
+                'error': str(e)
+            }
+    
+    def _get_cloud_type_by_height(self, height: float, cloud_cover: float) -> str:
+        """Визначити тип хмарності за висотою"""
+        if cloud_cover < 10:
+            return "Ясно"
+        elif cloud_cover < 30:
+            return "Малохмарно"
+        
+        if height < 2000:
+            return "Низькі (Stratus/Cumulus)"
+        elif height < 4000:
+            return "Середні (Altostratus/Altocumulus)"
+        else:
+            return "Високі (Cirrus/Cirrostratus)"
     
     def _get_openweathermap_altitude_wind(self, lat: float, lon: float) -> List[Dict]:
         """Отримати висотний вітер з OpenWeatherMap API"""
@@ -358,6 +428,7 @@ class WeatherAPI:
             humidity = current.get('relative_humidity_2m', 0)
             pressure = current.get('pressure_msl', 0)
             weather_code = current.get('weather_code', 0)
+            cloud_cover = current.get('cloud_cover', 0)
             
             # Опади
             precipitation = current.get('precipitation', 0)
@@ -389,6 +460,7 @@ class WeatherAPI:
                 message += f"• Напрям вітру: {wind_dir_text} ({int(wind_dir_10m)}°)\n"
             
             message += f"• Вологість: *{humidity}%*\n"
+            message += f"• Хмарність: *{cloud_cover}%*\n"
             message += f"• Тиск: *{pressure:.0f} hPa*\n"
             
             # Додаємо почасовий прогноз
@@ -400,6 +472,11 @@ class WeatherAPI:
             altitude_section = self._format_altitude_wind(weather_data.get('altitude_wind', []))
             if altitude_section:
                 message += altitude_section
+            
+            # Додаємо кромку хмар
+            cloud_base_section = self._format_cloud_base(weather_data.get('cloud_base', {}))
+            if cloud_base_section:
+                message += cloud_base_section
             
             message += f"\n📡 *Джерело:* Open-Meteo API"
             
@@ -459,6 +536,7 @@ class WeatherAPI:
                 wind_speed_max = daily.get('wind_speed_10m_max', [0])[i] if i < len(daily.get('wind_speed_10m_max', [])) else 0
                 wind_gusts_max = daily.get('wind_gusts_10m_max', [0])[i] if i < len(daily.get('wind_gusts_10m_max', [])) else 0
                 wind_dir = daily.get('wind_direction_10m_dominant', [0])[i] if i < len(daily.get('wind_direction_10m_dominant', [])) else 0
+                cloud_cover = daily.get('cloud_cover_mean', [50])[i] if i < len(daily.get('cloud_cover_mean', [])) else 50
                 
                 # Опис погоди
                 weather_desc = self.get_weather_description(weather_code)
@@ -508,6 +586,8 @@ class WeatherAPI:
                 if wind_dir_text:
                     message += f"• Напрям вітру: {wind_dir_text}\n"
                 
+                message += f"• Хмарність: *{cloud_cover:.0f}%*\n"
+                
                 if sunrise_time and sunset_time:
                     message += f"• Сонце: {sunrise_time} - {sunset_time}\n"
                 
@@ -520,6 +600,11 @@ class WeatherAPI:
                 altitude_section = self._format_altitude_wind(weather_data.get('altitude_wind', []))
                 if altitude_section:
                     message += altitude_section
+                
+                # Додаємо кромку хмар (використовуємо поточні дані для всіх днів)
+                cloud_base_section = self._format_cloud_base(weather_data.get('cloud_base', {}))
+                if cloud_base_section:
+                    message += cloud_base_section
                 
                 # Вказуємо джерело
                 using_openweathermap = weather_data.get('openweathermap_used', False)
@@ -571,6 +656,8 @@ class WeatherAPI:
                                 'weather_code': hourly.get('weather_code', [0])[i] if i < len(hourly.get('weather_code', [])) else 0,
                                 'wind_speed': hourly.get('wind_speed_10m', [0])[i] if i < len(hourly.get('wind_speed_10m', [])) else 0,
                                 'wind_direction': hourly.get('wind_direction_10m', [0])[i] if i < len(hourly.get('wind_direction_10m', [])) else 0,
+                                'cloud_cover': hourly.get('cloud_cover', [50])[i] if i < len(hourly.get('cloud_cover', [])) else 50,
+                                'humidity': hourly.get('relative_humidity_2m', [60])[i] if i < len(hourly.get('relative_humidity_2m', [])) else 60,
                             })
                     else:
                         if 8 <= hour <= 20 and len(forecast_hours) < 6:
@@ -582,6 +669,8 @@ class WeatherAPI:
                                 'weather_code': hourly.get('weather_code', [0])[i] if i < len(hourly.get('weather_code', [])) else 0,
                                 'wind_speed': hourly.get('wind_speed_10m', [0])[i] if i < len(hourly.get('wind_speed_10m', [])) else 0,
                                 'wind_direction': hourly.get('wind_direction_10m', [0])[i] if i < len(hourly.get('wind_direction_10m', [])) else 0,
+                                'cloud_cover': hourly.get('cloud_cover', [50])[i] if i < len(hourly.get('cloud_cover', [])) else 50,
+                                'humidity': hourly.get('relative_humidity_2m', [60])[i] if i < len(hourly.get('relative_humidity_2m', [])) else 60,
                             })
                 except Exception as e:
                     logger.error(f"❌ Error parsing hour: {e}")
@@ -604,7 +693,8 @@ class WeatherAPI:
                         precip_info += f" ({forecast['precipitation']:.1f} мм)"
                 
                 message += f"• {forecast['hour']:02d}:00 - {emoji} {forecast['temp']:.0f}°C{precip_info}, "
-                message += f"вітер {forecast['wind_speed']:.1f} м/с ({wind_dir_text})\n"
+                message += f"вітер {forecast['wind_speed']:.1f} м/с ({wind_dir_text}), "
+                message += f"хмарність {forecast['cloud_cover']:.0f}%\n"
             
             return message
             
@@ -645,17 +735,57 @@ class WeatherAPI:
             
             message += "\n"
         
-        # Додаємо загальну примітку
-        sources = set(data.get('source', '') for data in sorted_data)
-        
-        if 'OpenWeatherMap' in sources:
-            message += "\nℹ️ *Примітка:* Висотний вітер розраховано на основі даних OpenWeatherMap\n"
-            message += "та моделі профілю вітру в атмосфері.\n"
-        elif 'Estimation' in str(sources):
-            message += "\nℹ️ *Примітка:* Висотний вітер апроксимовано на основі земного.\n"
-            message += "Використано стандартну модель профілю вітру.\n"
-        
         return message
+    
+    def _format_cloud_base(self, cloud_base_data: Dict) -> str:
+        """Форматувати інформацію про кромку хмар"""
+        if not cloud_base_data or 'height' not in cloud_base_data:
+            return "\n☁️ *Кромка хмар:*\nДані тимчасово недоступні\n"
+        
+        try:
+            height = cloud_base_data['height']
+            dew_point = cloud_base_data.get('dew_point', 0)
+            temperature = cloud_base_data.get('temperature', 0)
+            humidity = cloud_base_data.get('humidity', 0)
+            cloud_cover = cloud_base_data.get('cloud_cover', 0)
+            cloud_type = cloud_base_data.get('cloud_type', 'Невідомо')
+            calculation_method = cloud_base_data.get('calculation_method', '')
+            
+            message = "\n☁️ *Кромка хмар (Cloud Base):*\n"
+            
+            if cloud_cover < 10:
+                message += f"• *Висота:* ~{height} м\n"
+                message += f"• *Стан:* Малохмарно або ясно\n"
+                message += f"• *Хмарність:* {cloud_cover}%\n"
+            else:
+                message += f"• *Висота:* ~{height} м\n"
+                message += f"• *Тип хмар:* {cloud_type}\n"
+                message += f"• *Хмарність:* {cloud_cover}%\n"
+                message += f"• *Температура:* {temperature}°C\n"
+                message += f"• *Вологість:* {humidity}%\n"
+                message += f"• *Точка роси:* {dew_point}°C\n"
+            
+            # Додаємо практичну інформацію
+            message += "\nℹ️ *Практична інформація:*\n"
+            
+            if height > 3000:
+                message += "• Висока кромка хмар - хороші умови для авіації\n"
+                message += "• Добре прогнозування погоди\n"
+            elif height > 1500:
+                message += "• Середня кромка хмар - нормальні умови\n"
+                message += "• Можливі невеликі опади\n"
+            else:
+                message += "• Низька кромка хмар - погана видимість\n"
+                message += "• Можливі опади та туман\n"
+            
+            if calculation_method:
+                message += f"\n📊 *Метод розрахунку:* {calculation_method}\n"
+            
+            return message
+            
+        except Exception as e:
+            logger.error(f"❌ Error formatting cloud base: {e}")
+            return "\n☁️ *Кромка хмар:*\nПомилка обробки даних\n"
     
     def _get_day_name(self, date_obj: datetime) -> str:
         """Отримати назву дня тижня українською"""
