@@ -15,23 +15,19 @@ class WeatherAPI:
         logger.info(f"🌤 Getting weather for lat={lat}, lon={lon}, days={forecast_days}")
         
         try:
+            # Спрощений запит для поточної погоди
             params = {
                 'latitude': lat,
                 'longitude': lon,
                 'current': [
                     'temperature_2m', 'relative_humidity_2m', 'apparent_temperature',
-                    'precipitation', 'rain', 'snowfall', 'weather_code',
-                    'cloud_cover', 'pressure_msl', 'wind_speed_10m',
-                    'wind_direction_10m', 'wind_gusts_10m', 'visibility'
+                    'precipitation', 'weather_code', 'pressure_msl', 
+                    'wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m'
                 ],
                 'hourly': [
-                    'temperature_2m', 'relative_humidity_2m', 'precipitation_probability',
-                    'precipitation', 'rain', 'snowfall', 'weather_code',
-                    'wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m',
-                    # Додаємо вітер на різних висотах
-                    'wind_speed_80m', 'wind_direction_80m', 'wind_gusts_80m',
-                    'wind_speed_120m', 'wind_direction_120m', 'wind_gusts_120m',
-                    'wind_speed_180m', 'wind_direction_180m', 'wind_gusts_180m'
+                    'temperature_2m', 'precipitation_probability',
+                    'precipitation', 'weather_code',
+                    'wind_speed_10m', 'wind_direction_10m'
                 ],
                 'daily': [
                     'temperature_2m_max', 'temperature_2m_min',
@@ -52,9 +48,12 @@ class WeatherAPI:
             if response.status_code == 200:
                 data = response.json()
                 logger.info(f"✅ Weather data received")
+                logger.info(f"📊 Current keys: {list(data.get('current', {}).keys())}")
+                logger.info(f"📊 Daily keys: {list(data.get('daily', {}).keys())}")
                 return data
             else:
                 logger.error(f"❌ Open-Meteo API error: {response.status_code}")
+                logger.error(f"❌ Response text: {response.text[:200]}")
                 return None
                 
         except Exception as e:
@@ -121,30 +120,6 @@ class WeatherAPI:
         }
         return emoji_codes.get(weather_code, "❓")
     
-    def calculate_cloud_base(self, temperature: float, humidity: float) -> Optional[int]:
-        """Розрахувати нижню кромку хмар"""
-        if temperature is None or humidity is None:
-            return None
-        
-        t = temperature
-        rh = humidity
-        
-        # Формула Магнуса для точки роси
-        a = 17.27
-        b = 237.7
-        alpha = ((a * t) / (b + t)) + math.log(rh / 100.0)
-        dew_point = (b * alpha) / (a - alpha)
-        
-        # Формула для висоти хмар (метри)
-        cloud_base = 125 * (t - dew_point)
-        
-        # Обмеження
-        if cloud_base < 100:
-            return 100
-        elif cloud_base > 5000:
-            return 5000
-        return int(cloud_base)
-    
     def format_current_weather(self, settlement_name: str, region: str, weather_data: dict) -> str:
         """Форматувати повідомлення про поточну погоду"""
         try:
@@ -155,14 +130,10 @@ class WeatherAPI:
             feels_like = current.get('apparent_temperature', temp)
             humidity = current.get('relative_humidity_2m', 0)
             pressure = current.get('pressure_msl', 0)
-            cloud_cover = current.get('cloud_cover', 0)
             weather_code = current.get('weather_code', 0)
-            visibility = current.get('visibility', 10000) / 1000  # у км
             
             # Опади
             precipitation = current.get('precipitation', 0)
-            rain = current.get('rain', 0)
-            snowfall = current.get('snowfall', 0)
             
             # Вітер
             wind_speed_10m = current.get('wind_speed_10m', 0)
@@ -171,12 +142,13 @@ class WeatherAPI:
             
             # Опис погоди
             weather_desc = self.get_weather_description(weather_code)
+            weather_emoji = self.get_weather_emoji(weather_code)
             
-            # Формуємо повідомлення у новому форматі
+            # Формуємо повідомлення
             message = f"🌤 *Погода в {settlement_name} ({region})*\n\n"
             
             message += f"📊 *Загальна інформація:*\n"
-            message += f"• Стан: {weather_desc}\n"
+            message += f"• Стан: {weather_emoji} {weather_desc}\n"
             message += f"• Температура: *{temp:.1f}°C*\n"
             message += f"• Відчувається як: *{feels_like:.1f}°C*\n"
             
@@ -191,13 +163,19 @@ class WeatherAPI:
             
             message += f"• Вологість: *{humidity}%*\n"
             message += f"• Тиск: *{pressure:.0f} hPa*\n"
-            message += f"• Видимість: *{visibility:.1f} км*\n"
-            message += f"• Хмарність: *{cloud_cover}%*\n"
             
             # Додаємо почасовий прогноз
-            hourly_section = self._format_hourly_forecast(weather_data, include_altitude=False)
+            hourly_section = self._format_hourly_forecast(weather_data)
             if hourly_section:
                 message += hourly_section
+            
+            # Додаємо примітку про відсутність даних про вітер на висотах
+            message += "\n💨 *Вітер на висотах:*\n"
+            message += "• ~400м: дані відсутні\n"
+            message += "• ~600м: дані відсутні\n"
+            message += "• ~800м: дані відсутні\n"
+            message += "• ~1000м: дані відсутні\n"
+            message += "\nℹ️ *Примітка:* Для отримання даних про вітер на висотах потрібен платний доступ до API.\n"
             
             message += f"\n📡 *Джерело:* Open-Meteo API"
             message += f"\n🔄 *Оновлено:* {datetime.now().strftime('%H:%M %d.%m.%Y')}"
@@ -306,10 +284,10 @@ class WeatherAPI:
                 if hourly_section:
                     message += hourly_section
                 
-                # Додаємо вітер на висотах для кожного дня
-                altitude_wind_section = self._format_altitude_wind_for_day(weather_data, i)
-                if altitude_wind_section:
-                    message += altitude_wind_section
+                # Додаємо вітер на висотах (якщо дані є)
+                altitude_section = self._get_altitude_wind_note()
+                if altitude_section:
+                    message += altitude_section
                 
                 message += f"\n📡 *Джерело:* Open-Meteo API"
                 
@@ -321,11 +299,11 @@ class WeatherAPI:
             logger.error(f"❌ Error formatting 3-day forecast: {e}", exc_info=True)
             return []
 
-    def _format_hourly_forecast(self, weather_data: dict, include_altitude: bool = True) -> str:
+    def _format_hourly_forecast(self, weather_data: dict) -> str:
         """Форматувати почасовий прогноз для поточної погоди"""
-        return self._format_hourly_forecast_for_day(weather_data, day_index=0, include_altitude=include_altitude)
+        return self._format_hourly_forecast_for_day(weather_data, day_index=0)
 
-    def _format_hourly_forecast_for_day(self, weather_data: dict, day_index: int = 0, include_altitude: bool = True) -> str:
+    def _format_hourly_forecast_for_day(self, weather_data: dict, day_index: int = 0) -> str:
         """Форматувати почасовий прогноз для конкретного дня"""
         logger.info(f"🔧 Formatting hourly forecast for day {day_index}")
         
@@ -404,90 +382,15 @@ class WeatherAPI:
             logger.error(f"❌ Error formatting hourly forecast for day {day_index}: {e}")
             return ""
 
-    def _format_altitude_wind_for_day(self, weather_data: dict, day_index: int = 0) -> str:
-        """Форматувати вітер на висотах для конкретного дня"""
-        logger.info(f"🔧 Formatting altitude wind for day {day_index}")
-        
-        try:
-            hourly = weather_data.get('hourly', {})
-            
-            if 'time' not in hourly or len(hourly['time']) == 0:
-                return ""
-            
-            # Визначаємо години для дня
-            hours_per_day = 24
-            start_hour = day_index * hours_per_day
-            
-            # Беремо першу годину дня (12:00) для отримання даних про вітер на висотах
-            target_hour_index = start_hour + 12  # 12:00 дня
-            
-            if target_hour_index >= len(hourly['time']):
-                target_hour_index = start_hour
-            
-            # Отримуємо дані про вітер на висотах
-            wind_data = {}
-            
-            # Перевіряємо наявність даних
-            altitude_params = [
-                ('80m', 'wind_speed_80m', 'wind_direction_80m', 'wind_gusts_80m'),
-                ('120m', 'wind_speed_120m', 'wind_direction_120m', 'wind_gusts_120m'),
-                ('180m', 'wind_speed_180m', 'wind_direction_180m', 'wind_gusts_180m'),
-            ]
-            
-            has_altitude_data = False
-            for altitude_name, speed_key, dir_key, gust_key in altitude_params:
-                if (speed_key in hourly and len(hourly[speed_key]) > target_hour_index and
-                    dir_key in hourly and len(hourly[dir_key]) > target_hour_index):
-                    
-                    wind_speed = hourly[speed_key][target_hour_index]
-                    wind_dir = hourly[dir_key][target_hour_index]
-                    wind_gust = hourly.get(gust_key, [0])[target_hour_index] if gust_key in hourly else 0
-                    
-                    wind_data[altitude_name] = {
-                        'speed': wind_speed,
-                        'direction': wind_dir,
-                        'gust': wind_gust
-                    }
-                    has_altitude_data = True
-            
-            if not has_altitude_data:
-                return "\n💨 *Вітер на висотах:*\nДані відсутні\n"
-            
-            # Форматуємо повідомлення
-            message = "\n💨 *Вітер на висотах:*\n"
-            
-            # Вітер на ~400м (80м)
-            if '80m' in wind_data:
-                data = wind_data['80m']
-                wind_dir_text = self.get_wind_direction(data['direction'])
-                message += f"• ~400м: {wind_dir_text} ({int(data['direction'])}°) {data['speed']:.1f} м/с (пориви до {data['gust']:.1f} м/с)\n"
-            
-            # Вітер на ~600м (120м)
-            if '120m' in wind_data:
-                data = wind_data['120m']
-                wind_dir_text = self.get_wind_direction(data['direction'])
-                message += f"• ~600м: {wind_dir_text} ({int(data['direction'])}°) {data['speed']:.1f} м/с (пориви до {data['gust']:.1f} м/с)\n"
-            
-            # Вітер на ~800м (180м)
-            if '180m' in wind_data:
-                data = wind_data['180m']
-                wind_dir_text = self.get_wind_direction(data['direction'])
-                message += f"• ~800м: {wind_dir_text} ({int(data['direction'])}°) {data['speed']:.1f} м/с (пориви до {data['gust']:.1f} м/с)\n"
-            
-            # Для 1000м використовуємо дані з 180м (екстраполяція)
-            if '180m' in wind_data:
-                data = wind_data['180m']
-                wind_dir_text = self.get_wind_direction(data['direction'])
-                # Трохи збільшуємо швидкість для 1000м
-                estimated_speed = data['speed'] * 1.1
-                estimated_gust = data['gust'] * 1.1
-                message += f"• ~1000м: {wind_dir_text} ({int(data['direction'])}°) {estimated_speed:.1f} м/с (пориви до {estimated_gust:.1f} м/с)\n"
-            
-            return message
-            
-        except Exception as e:
-            logger.error(f"❌ Error formatting altitude wind for day {day_index}: {e}")
-            return ""
+    def _get_altitude_wind_note(self) -> str:
+        """Повернути примітку про відсутність даних про вітер на висотах"""
+        message = "\n💨 *Вітер на висотах:*\n"
+        message += "• ~400м: дані відсутні\n"
+        message += "• ~600м: дані відсутні\n"
+        message += "• ~800м: дані відсутні\n"
+        message += "• ~1000м: дані відсутні\n"
+        message += "\nℹ️ *Примітка:* Для отримання даних про вітер на висотах потрібен платний доступ до API.\n"
+        return message
 
     def _get_day_name(self, date_obj: datetime) -> str:
         """Отримати назву дня тижня українською"""
