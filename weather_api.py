@@ -1,14 +1,41 @@
 import requests
 import math
 from datetime import datetime, timedelta
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 import logging
+import json
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+@dataclass
+class WindData:
+    """Дані про вітер на певній висоті"""
+    altitude: int  # висота в метрах
+    speed: float   # швидкість вітру в м/с
+    direction: float  # напрям у градусах (0-360)
+    u_component: float  # U-компонента (зхід-схід)
+    v_component: float  # V-компонента (південь-північ)
+
 class WeatherAPI:
     def __init__(self):
-        self.base_url = "https://api.open-meteo.com/v1/forecast"
+        self.open_meteo_url = "https://api.open-meteo.com/v1/forecast"
+        self.noaa_gfs_url = "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl"
+        
+        # Налаштування для NOAA GFS
+        self.gfs_resolution = "0p25"  # 0.25 градуса роздільна здатність
+        self.forecast_hour = "000"    # прогноз на 0 годин (аналіз)
+        
+        # Доступні рівні тиску для вітру (в гПа)
+        self.pressure_levels = [1000, 925, 850, 700, 500]
+        # Відповідність рівня тиску до висоти (приблизно)
+        self.pressure_to_altitude = {
+            1000: 100,    # ~100м
+            925: 800,     # ~800м
+            850: 1500,    # ~1500м
+            700: 3000,    # ~3000м
+            500: 5500     # ~5500м
+        }
     
     def get_weather(self, lat: float, lon: float, forecast_days: int = 3) -> Optional[dict]:
         """Отримати погоду з Open-Meteo API"""
@@ -40,16 +67,21 @@ class WeatherAPI:
                 'forecast_days': forecast_days
             }
             
-            logger.info(f"🌍 Request URL: {self.base_url}")
+            logger.info(f"🌍 Open-Meteo URL: {self.open_meteo_url}")
             
-            response = requests.get(self.base_url, params=params, timeout=15)
-            logger.info(f"📡 Response status: {response.status_code}")
+            response = requests.get(self.open_meteo_url, params=params, timeout=15)
+            logger.info(f"📡 Open-Meteo response status: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
-                logger.info(f"✅ Weather data received")
-                logger.info(f"📊 Current keys: {list(data.get('current', {}).keys())}")
-                logger.info(f"📊 Daily keys: {list(data.get('daily', {}).keys())}")
+                logger.info(f"✅ Open-Meteo data received")
+                
+                # Додаємо дані про вітер на висотах з NOAA GFS
+                altitude_wind_data = self._get_noaa_wind_data(lat, lon)
+                if altitude_wind_data:
+                    data['altitude_wind'] = altitude_wind_data
+                    logger.info(f"✅ Added NOAA GFS wind data for {len(altitude_wind_data)} altitudes")
+                
                 return data
             else:
                 logger.error(f"❌ Open-Meteo API error: {response.status_code}")
@@ -59,14 +91,154 @@ class WeatherAPI:
         except Exception as e:
             logger.error(f"❌ Open-Meteo error: {e}", exc_info=True)
             return None
-
+    
+    def _get_noaa_wind_data(self, lat: float, lon: float) -> List[Dict]:
+        """Отримати дані про вітер на різних висотах з NOAA GFS"""
+        logger.info(f"🌪 Getting NOAA GFS wind data for lat={lat}, lon={lon}")
+        
+        try:
+            # Отримуємо поточну дату для NOAA GFS
+            current_time = datetime.utcnow()
+            
+            # NOAA GFS оновлюється кожні 6 годин (00, 06, 12, 18 UTC)
+            run_hour = (current_time.hour // 6) * 6
+            run_date = current_time.strftime("%Y%m%d")
+            
+            # Формуємо базовий URL для NOAA GFS
+            base_url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_{self.gfs_resolution}.pl"
+            
+            # Структура каталогу NOAA
+            dir_path = f"/gfs.{run_date}/{run_hour:02d}/atmos"
+            
+            wind_data = []
+            
+            # Для кожної висоти отримуємо дані
+            target_altitudes = [400, 600, 800, 1000]
+            
+            for altitude in target_altitudes:
+                # Знаходимо найближчий рівень тиску для цієї висоти
+                pressure_level = self._find_nearest_pressure_level(altitude)
+                altitude_approx = self.pressure_to_altitude.get(pressure_level, altitude)
+                
+                # Отримуємо U-компоненту вітру
+                u_wind = self._get_gfs_parameter(
+                    base_url, dir_path, lat, lon, pressure_level, 'UGRD'
+                )
+                
+                # Отримуємо V-компоненту вітру
+                v_wind = self._get_gfs_parameter(
+                    base_url, dir_path, lat, lon, pressure_level, 'VGRD'
+                )
+                
+                if u_wind is not None and v_wind is not None:
+                    # Обчислюємо швидкість та напрям вітру
+                    wind_speed = math.sqrt(u_wind**2 + v_wind**2)
+                    wind_direction = self._calculate_wind_direction(u_wind, v_wind)
+                    
+                    wind_data.append({
+                        'altitude': altitude,
+                        'altitude_approx': altitude_approx,
+                        'pressure_level': pressure_level,
+                        'speed': wind_speed,
+                        'direction': wind_direction,
+                        'u_component': u_wind,
+                        'v_component': v_wind
+                    })
+                    
+                    logger.info(f"✅ NOAA wind at ~{altitude}m: {wind_speed:.1f} m/s, {wind_direction:.0f}°")
+                else:
+                    logger.warning(f"⚠️ No NOAA data for {altitude}m")
+            
+            return wind_data
+            
+        except Exception as e:
+            logger.error(f"❌ NOAA GFS error: {e}", exc_info=True)
+            return []
+    
+    def _get_gfs_parameter(self, base_url: str, dir_path: str, 
+                          lat: float, lon: float, 
+                          level: int, parameter: str) -> Optional[float]:
+        """Отримати параметр з NOAA GFS"""
+        try:
+            # NOAA використовує рівні у форматі "1000 mb" тощо
+            level_str = f"{level} mb"
+            
+            params = {
+                'file': f'gfs.t{self.forecast_hour}z.pgrb2.{self.gfs_resolution}.f000',
+                'all_lev': 'on',
+                f'var_{parameter}': 'on',
+                'lev_{level_str}': 'on',
+                'subregion': '',
+                'leftlon': lon - 0.125,
+                'rightlon': lon + 0.125,
+                'toplat': lat + 0.125,
+                'bottomlat': lat - 0.125,
+                'dir': dir_path
+            }
+            
+            logger.debug(f"🌪 NOAA request: {params}")
+            
+            response = requests.get(base_url, params=params, timeout=30)
+            
+            if response.status_code == 200 and response.content:
+                # NOAA повертає дані у текстовому форматі
+                content = response.text.strip()
+                if content:
+                    # Спроба розпарсити числове значення
+                    try:
+                        # Зазвичай перше число - це значення
+                        lines = content.split('\n')
+                        for line in lines:
+                            if line.strip():
+                                parts = line.split()
+                                if len(parts) > 0:
+                                    return float(parts[0])
+                    except (ValueError, IndexError):
+                        pass
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ NOAA parameter error: {e}")
+            return None
+    
+    def _find_nearest_pressure_level(self, altitude_m: int) -> int:
+        """Знайти найближчий рівень тиску для заданої висоти"""
+        # Проста лінійна інтерполяція
+        if altitude_m <= 100:
+            return 1000
+        elif altitude_m <= 800:
+            return 925
+        elif altitude_m <= 1500:
+            return 850
+        elif altitude_m <= 3000:
+            return 700
+        else:
+            return 500
+    
+    def _calculate_wind_direction(self, u: float, v: float) -> float:
+        """Обчислити напрям вітру з U та V компонент"""
+        if u == 0 and v == 0:
+            return 0
+        
+        # Напрям вітру в градусах (0 = північ, 90 = схід)
+        direction_rad = math.atan2(u, v)
+        direction_deg = math.degrees(direction_rad)
+        
+        # Конвертуємо у стандартний формат (0-360, північ = 0°)
+        direction_deg = (direction_deg + 360) % 360
+        
+        return direction_deg
+    
     def get_wind_direction(self, degrees: float) -> str:
         """Конвертувати градуси у назву напрямку вітру"""
         if degrees is None:
             return "Не визначено"
         
-        directions = ["Північний", "Північно-східний", "Східний", "Південно-східний",
-                     "Південний", "Південно-західний", "Західний", "Північно-західний"]
+        directions = [
+            "Північний", "Північно-східний", "Східний", "Південно-східний",
+            "Південний", "Південно-західний", "Західний", "Північно-західний"
+        ]
         index = round(degrees / 45) % 8
         return directions[index]
     
@@ -169,15 +341,12 @@ class WeatherAPI:
             if hourly_section:
                 message += hourly_section
             
-            # Додаємо примітку про відсутність даних про вітер на висотах
-            message += "\n💨 *Вітер на висотах:*\n"
-            message += "• ~400м: дані відсутні\n"
-            message += "• ~600м: дані відсутні\n"
-            message += "• ~800м: дані відсутні\n"
-            message += "• ~1000м: дані відсутні\n"
-            message += "\nℹ️ *Примітка:* Для отримання даних про вітер на висотах потрібен платний доступ до API.\n"
+            # Додаємо вітер на висотах з NOAA
+            altitude_section = self._format_altitude_wind(weather_data.get('altitude_wind', []))
+            if altitude_section:
+                message += altitude_section
             
-            message += f"\n📡 *Джерело:* Open-Meteo API"
+            message += f"\n📡 *Джерело:* Open-Meteo API + NOAA GFS"
             message += f"\n🔄 *Оновлено:* {datetime.now().strftime('%H:%M %d.%m.%Y')}"
             
             return message
@@ -284,12 +453,12 @@ class WeatherAPI:
                 if hourly_section:
                     message += hourly_section
                 
-                # Додаємо вітер на висотах (якщо дані є)
-                altitude_section = self._get_altitude_wind_note()
+                # Додаємо вітер на висотах з NOAA
+                altitude_section = self._format_altitude_wind(weather_data.get('altitude_wind', []))
                 if altitude_section:
                     message += altitude_section
                 
-                message += f"\n📡 *Джерело:* Open-Meteo API"
+                message += f"\n📡 *Джерело:* Open-Meteo API + NOAA GFS"
                 
                 messages.append(message)
             
@@ -298,41 +467,32 @@ class WeatherAPI:
         except Exception as e:
             logger.error(f"❌ Error formatting 3-day forecast: {e}", exc_info=True)
             return []
-
+    
     def _format_hourly_forecast(self, weather_data: dict) -> str:
         """Форматувати почасовий прогноз для поточної погоди"""
         return self._format_hourly_forecast_for_day(weather_data, day_index=0)
-
+    
     def _format_hourly_forecast_for_day(self, weather_data: dict, day_index: int = 0) -> str:
         """Форматувати почасовий прогноз для конкретного дня"""
-        logger.info(f"🔧 Formatting hourly forecast for day {day_index}")
-        
         try:
             hourly = weather_data.get('hourly', {})
             
             if 'time' not in hourly or len(hourly['time']) == 0:
-                logger.warning("❌ No hourly time data available")
                 return ""
             
             # Визначаємо години для дня
             hours_per_day = 24
             start_hour = day_index * hours_per_day
-            end_hour = start_hour + hours_per_day
             
-            # Обмежуємо до доступних даних
-            if start_hour >= len(hourly['time']):
-                return ""
-            
-            # Беремо наступні 6 годин з початку дня або поточного часу
+            # Беремо наступні 6 годин
             current_hour = datetime.now().hour if day_index == 0 else 0
             forecast_hours = []
             
-            for i in range(start_hour, min(end_hour, len(hourly['time']))):
+            for i in range(start_hour, min(start_hour + hours_per_day, len(hourly['time']))):
                 try:
                     time_str = hourly['time'][i]
                     hour = int(time_str.split('T')[1].split(':')[0])
                     
-                    # Для сьогодні беремо години починаючи з поточної, для інших днів - з 8 ранку
                     if day_index == 0:
                         if hour >= current_hour and len(forecast_hours) < 6:
                             forecast_hours.append({
@@ -344,7 +504,6 @@ class WeatherAPI:
                                 'wind_speed': hourly.get('wind_speed_10m', [0])[i] if i < len(hourly.get('wind_speed_10m', [])) else 0,
                             })
                     else:
-                        # Для наступних днів беремо години з 8 до 20
                         if 8 <= hour <= 20 and len(forecast_hours) < 6:
                             forecast_hours.append({
                                 'hour': hour,
@@ -367,7 +526,6 @@ class WeatherAPI:
             for forecast in forecast_hours:
                 emoji = self.get_weather_emoji(forecast['weather_code'])
                 
-                # Форматуємо інформацію про опади
                 precip_info = ""
                 if forecast['precip_prob'] > 0:
                     precip_info = f", {forecast['precip_prob']}% опади"
@@ -379,19 +537,31 @@ class WeatherAPI:
             return message
             
         except Exception as e:
-            logger.error(f"❌ Error formatting hourly forecast for day {day_index}: {e}")
+            logger.error(f"❌ Error formatting hourly forecast: {e}")
             return ""
-
-    def _get_altitude_wind_note(self) -> str:
-        """Повернути примітку про відсутність даних про вітер на висотах"""
-        message = "\n💨 *Вітер на висотах:*\n"
-        message += "• ~400м: дані відсутні\n"
-        message += "• ~600м: дані відсутні\n"
-        message += "• ~800м: дані відсутні\n"
-        message += "• ~1000м: дані відсутні\n"
-        message += "\nℹ️ *Примітка:* Для отримання даних про вітер на висотах потрібен платний доступ до API.\n"
+    
+    def _format_altitude_wind(self, wind_data: List[Dict]) -> str:
+        """Форматувати вітер на висотах"""
+        if not wind_data:
+            return "\n💨 *Вітер на висотах:*\nДані з NOAA GFS тимчасово недоступні\n"
+        
+        message = "\n💨 *Вітер на висотах (NOAA GFS):*\n"
+        
+        # Сортуємо за висотою
+        sorted_data = sorted(wind_data, key=lambda x: x['altitude'])
+        
+        for data in sorted_data:
+            wind_dir_text = self.get_wind_direction(data['direction'])
+            altitude = data['altitude']
+            approx_altitude = data.get('altitude_approx', altitude)
+            
+            message += f"• ~{altitude}м ({approx_altitude}м): {wind_dir_text} "
+            message += f"({data['direction']:.0f}°) {data['speed']:.1f} м/с\n"
+        
+        message += "\nℹ️ *Примітка:* Дані з NOAA Global Forecast System (GFS)\n"
+        
         return message
-
+    
     def _get_day_name(self, date_obj: datetime) -> str:
         """Отримати назву дня тижня українською"""
         days = {
