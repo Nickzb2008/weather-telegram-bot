@@ -945,7 +945,7 @@ async def process_current_weather(update: Update, context: ContextTypes.DEFAULT_
     """Обробка запиту про поточну погоду"""
     try:
         # ВИЗНАЧАЄМО ТИП ЗАПИТУ
-        is_callback = hasattr(update, 'callback_query')
+        is_callback = hasattr(update, 'callback_query') and update.callback_query is not None
         
         if is_callback:
             # Якщо це callback від інлайн-кнопки
@@ -976,7 +976,7 @@ async def process_current_weather(update: Update, context: ContextTypes.DEFAULT_
         if not lat or not lon:
             error_msg = f"❌ Не знайдено координат для '{settlement_name}' ({region})"
             if is_callback:
-                await update.callback_query.edit_message_text(error_msg, parse_mode='Markdown')
+                await query.edit_message_text(error_msg, parse_mode='Markdown')
             else:
                 await update.message.reply_text(error_msg, parse_mode='Markdown')
             return
@@ -993,7 +993,7 @@ async def process_current_weather(update: Update, context: ContextTypes.DEFAULT_
                 f"• Спробуйте через хвилину"
             )
             if is_callback:
-                await update.callback_query.edit_message_text(error_text, parse_mode='Markdown')
+                await query.edit_message_text(error_text, parse_mode='Markdown')
             else:
                 await update.message.reply_text(error_text, parse_mode='Markdown')
             return
@@ -1004,7 +1004,7 @@ async def process_current_weather(update: Update, context: ContextTypes.DEFAULT_
         if not weather_text:
             error_text = f"❌ Помилка обробки даних для {settlement_name}"
             if is_callback:
-                await update.callback_query.edit_message_text(error_text, parse_mode='Markdown')
+                await query.edit_message_text(error_text, parse_mode='Markdown')
             else:
                 await update.message.reply_text(error_text, parse_mode='Markdown')
             return
@@ -1046,16 +1046,18 @@ async def process_current_weather(update: Update, context: ContextTypes.DEFAULT_
         logger.error(f"Error processing weather request: {e}", exc_info=True)
         error_msg = "❌ Виникла критична помилка. Спробуйте пізніше."
         
-        # ВИПРАВЛЕНО: Обробка помилок для обох типів запитів
-        if hasattr(update, 'callback_query'):
-            try:
-                await update.callback_query.edit_message_text(error_msg, parse_mode='Markdown')
-            except:
-                await update.callback_query.answer(error_msg)
-        elif hasattr(update, 'message'):
-            await update.message.reply_text(error_msg, parse_mode='Markdown')
-        else:
-            # Якщо нічого не працює, спробуємо надіслати через chat
+        # Обробка помилок для обох типів запитів
+        try:
+            if is_callback:
+                try:
+                    await update.callback_query.edit_message_text(error_msg, parse_mode='Markdown')
+                except:
+                    await update.callback_query.answer(error_msg)
+            else:
+                await update.message.reply_text(error_msg, parse_mode='Markdown')
+        except Exception as final_error:
+            logger.error(f"Failed to send error message: {final_error}")
+            # Спробуємо надіслати повідомлення через chat, якщо він доступний
             try:
                 if 'chat' in locals():
                     await chat.send_message(error_msg, parse_mode='Markdown')
