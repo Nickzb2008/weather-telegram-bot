@@ -12,6 +12,8 @@ class WeatherAPI:
     
     def get_weather(self, lat: float, lon: float, forecast_days: int = 3) -> Optional[dict]:
         """Отримати погоду з Open-Meteo API"""
+        logger.info(f"🌤 Getting weather for lat={lat}, lon={lon}, days={forecast_days}")
+        
         try:
             params = {
                 'latitude': lat,
@@ -38,18 +40,32 @@ class WeatherAPI:
                 'forecast_days': forecast_days
             }
             
+            logger.info(f"🌍 Request URL: {self.base_url}")
+            logger.info(f"📋 Request params: {params}")
+            
             response = requests.get(self.base_url, params=params, timeout=15)
+            logger.info(f"📡 Response status: {response.status_code}")
             
             if response.status_code == 200:
-                return response.json()
+                data = response.json()
+                logger.info(f"✅ Weather data received")
+                logger.info(f"📊 Data keys: {list(data.keys())}")
+                
+                if 'daily' in data:
+                    logger.info(f"📅 Daily keys: {list(data['daily'].keys())}")
+                    if 'time' in data['daily']:
+                        logger.info(f"📆 Daily time entries: {len(data['daily']['time'])}")
+                
+                return data
             else:
-                logger.error(f"Open-Meteo API error: {response.status_code}")
+                logger.error(f"❌ Open-Meteo API error: {response.status_code}")
+                logger.error(f"❌ Response text: {response.text[:200]}")
                 return None
                 
         except Exception as e:
-            logger.error(f"Open-Meteo error: {e}")
+            logger.error(f"❌ Open-Meteo error: {e}", exc_info=True)
             return None
-    
+
     def get_wind_direction(self, degrees: float) -> str:
         """Конвертувати градуси у назву напрямку вітру"""
         if degrees is None:
@@ -189,35 +205,52 @@ class WeatherAPI:
     
     def format_3day_forecast(self, settlement_name: str, region: str, weather_data: dict) -> List[str]:
         """Форматувати прогноз на 3 дні (3 окремих повідомлення)"""
+        logger.info(f"🔧 Formatting 3-day forecast for {settlement_name} ({region})")
+        
         try:
             daily = weather_data.get('daily', {})
+            logger.info(f"📊 Daily data keys: {list(daily.keys())}")
             
-            if 'time' not in daily or len(daily['time']) == 0:
-                return ["❌ Не вдалося отримати прогноз погоди"]
+            if 'time' not in daily:
+                logger.error("❌ 'time' key not found in daily data")
+                return []
+            
+            if len(daily['time']) == 0:
+                logger.error("❌ 'time' array is empty")
+                return []
+            
+            logger.info(f"📅 Days available: {len(daily['time'])}")
             
             messages = []
             
             for i in range(min(3, len(daily['time']))):
                 date_str = daily['time'][i]
+                logger.info(f"📅 Processing day {i+1}: {date_str}")
+                
                 try:
+                    # Конвертуємо дату
                     date_obj = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
                     date_formatted = date_obj.strftime('%d.%m.%Y')
                     day_name = self._get_day_name(date_obj)
-                except:
+                    logger.info(f"📆 Formatted date: {date_formatted} ({day_name})")
+                except Exception as e:
+                    logger.error(f"❌ Error parsing date {date_str}: {e}")
                     date_formatted = date_str
                     day_name = ""
                 
                 # Отримуємо дані для дня
-                max_temp = daily.get('temperature_2m_max', [0])[i]
-                min_temp = daily.get('temperature_2m_min', [0])[i]
-                precip_sum = daily.get('precipitation_sum', [0])[i]
-                precip_hours = daily.get('precipitation_hours', [0])[i]
-                weather_code = daily.get('weather_code', [0])[i]
-                sunrise = daily.get('sunrise', [''])[i]
-                sunset = daily.get('sunset', [''])[i]
-                wind_speed_max = daily.get('wind_speed_10m_max', [0])[i]
-                wind_gusts_max = daily.get('wind_gusts_10m_max', [0])[i]
-                wind_dir = daily.get('wind_direction_10m_dominant', [0])[i]
+                max_temp = daily.get('temperature_2m_max', [0])[i] if i < len(daily.get('temperature_2m_max', [])) else 0
+                min_temp = daily.get('temperature_2m_min', [0])[i] if i < len(daily.get('temperature_2m_min', [])) else 0
+                precip_sum = daily.get('precipitation_sum', [0])[i] if i < len(daily.get('precipitation_sum', [])) else 0
+                precip_hours = daily.get('precipitation_hours', [0])[i] if i < len(daily.get('precipitation_hours', [])) else 0
+                weather_code = daily.get('weather_code', [0])[i] if i < len(daily.get('weather_code', [])) else 0
+                sunrise = daily.get('sunrise', [''])[i] if i < len(daily.get('sunrise', [])) else ''
+                sunset = daily.get('sunset', [''])[i] if i < len(daily.get('sunset', [])) else ''
+                wind_speed_max = daily.get('wind_speed_10m_max', [0])[i] if i < len(daily.get('wind_speed_10m_max', [])) else 0
+                wind_gusts_max = daily.get('wind_gusts_10m_max', [0])[i] if i < len(daily.get('wind_gusts_10m_max', [])) else 0
+                wind_dir = daily.get('wind_direction_10m_dominant', [0])[i] if i < len(daily.get('wind_direction_10m_dominant', [])) else 0
+                
+                logger.info(f"🌡 Day {i+1} data: max_temp={max_temp}, min_temp={min_temp}, precip={precip_sum}")
                 
                 # Опис погоди
                 weather_desc = self.get_weather_description(weather_code)
@@ -229,12 +262,16 @@ class WeatherAPI:
                 if sunrise:
                     try:
                         sunrise_time = datetime.fromisoformat(sunrise.replace('Z', '+00:00')).strftime('%H:%M')
-                    except:
+                        logger.info(f"🌅 Sunrise: {sunrise_time}")
+                    except Exception as e:
+                        logger.error(f"❌ Error parsing sunrise {sunrise}: {e}")
                         sunrise_time = sunrise
                 if sunset:
                     try:
                         sunset_time = datetime.fromisoformat(sunset.replace('Z', '+00:00')).strftime('%H:%M')
-                    except:
+                        logger.info(f"🌇 Sunset: {sunset_time}")
+                    except Exception as e:
+                        logger.error(f"❌ Error parsing sunset {sunset}: {e}")
                         sunset_time = sunset
                 
                 # Напрям вітру
@@ -268,43 +305,57 @@ class WeatherAPI:
                 
                 # Додаємо почасовий прогноз для сьогодні
                 if i == 0:
-                    message += self._format_hourly_forecast(weather_data)
+                    hourly_section = self._format_hourly_forecast(weather_data)
+                    if hourly_section:
+                        message += hourly_section
                 
                 message += f"\n📡 *Джерело:* Open-Meteo API"
                 
                 messages.append(message)
+                logger.info(f"✅ Day {i+1} message created: {len(message)} chars")
             
+            logger.info(f"✅ Generated {len(messages)} forecast messages total")
             return messages
             
         except Exception as e:
-            logger.error(f"Error formatting 3-day forecast: {e}")
-            return ["❌ Помилка при формуванні прогнозу"]
-    
+            logger.error(f"❌ Error formatting 3-day forecast: {e}", exc_info=True)
+            return []
+
     def _format_hourly_forecast(self, weather_data: dict) -> str:
         """Форматувати почасовий прогноз"""
+        logger.info("🔧 Formatting hourly forecast")
+        
         try:
             hourly = weather_data.get('hourly', {})
+            logger.info(f"⏰ Hourly data keys: {list(hourly.keys())}")
             
             if 'time' not in hourly or len(hourly['time']) == 0:
+                logger.warning("❌ No hourly time data available")
                 return ""
             
+            # Знаходимо поточну годину
             current_hour = datetime.now().hour
+            logger.info(f"🕐 Current hour: {current_hour}")
             
             # Знаходимо наступні 6 годин
             forecast_hours = []
-            for i, time_str in enumerate(hourly['time']):
+            for i, time_str in enumerate(hourly['time'][:24]):  # Перевіряємо тільки наступні 24 години
                 try:
                     hour = int(time_str.split('T')[1].split(':')[0])
                     if hour >= current_hour and len(forecast_hours) < 6:
                         forecast_hours.append({
                             'hour': hour,
-                            'temp': hourly.get('temperature_2m', [0])[i],
-                            'precip_prob': hourly.get('precipitation_probability', [0])[i],
-                            'weather_code': hourly.get('weather_code', [0])[i],
-                            'wind_speed': hourly.get('wind_speed_10m', [0])[i]
+                            'temp': hourly.get('temperature_2m', [0])[i] if i < len(hourly.get('temperature_2m', [])) else 0,
+                            'precip_prob': hourly.get('precipitation_probability', [0])[i] if i < len(hourly.get('precipitation_probability', [])) else 0,
+                            'weather_code': hourly.get('weather_code', [0])[i] if i < len(hourly.get('weather_code', [])) else 0,
+                            'wind_speed': hourly.get('wind_speed_10m', [0])[i] if i < len(hourly.get('wind_speed_10m', [])) else 0
                         })
-                except:
+                        logger.info(f"⏱ Added hour {hour}: temp={forecast_hours[-1]['temp']}")
+                except Exception as e:
+                    logger.error(f"❌ Error parsing hour from {time_str}: {e}")
                     continue
+            
+            logger.info(f"✅ Found {len(forecast_hours)} forecast hours")
             
             if not forecast_hours:
                 return ""
@@ -321,9 +372,9 @@ class WeatherAPI:
             return message
             
         except Exception as e:
-            logger.error(f"Error formatting hourly forecast: {e}")
+            logger.error(f"❌ Error formatting hourly forecast: {e}")
             return ""
-    
+
     def _get_day_name(self, date_obj: datetime) -> str:
         """Отримати назву дня тижня українською"""
         days = {

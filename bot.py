@@ -397,13 +397,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith('forecast_'):
         try:
             if data == 'forecast_city':
-                favorites = context.user_data.get('favorites', [])
-                if favorites:
+                # Отримуємо останнє місто з контексту
+                if 'last_city' in context.user_data and 'last_region' in context.user_data:
+                    city = context.user_data['last_city']
+                    region = context.user_data['last_region']
                     from telegram import Update
                     fake_update = Update(update_id=update.update_id, callback_query=query)
-                    await process_3day_forecast(fake_update, context, favorites[0]['name'], favorites[0]['region'])
+                    await process_3day_forecast(fake_update, context, city, region)
                 else:
-                    await query.answer("❌ У вас немає улюблених міст")
+                    await query.answer("❌ Спочатку знайдіть місто для прогнозу")
             else:
                 index = int(data.split('_')[1]) - 1
                 if 'last_search_results' in context.user_data:
@@ -420,7 +422,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except (ValueError, IndexError) as e:
             logger.error(f"Error processing forecast button: {e}")
             await query.answer("❌ Помилка обробки запиту")
-    
+
     elif data.startswith('city_'):
         try:
             index = int(data.split('_')[1]) - 1
@@ -893,13 +895,17 @@ async def process_current_weather(update: Update, context: ContextTypes.DEFAULT_
 
 async def process_3day_forecast(update: Update, context: ContextTypes.DEFAULT_TYPE, settlement_name: str, region: str):
     """Обробка запиту про прогноз на 3 дні"""
+    logger.info(f"Starting 3-day forecast for {settlement_name} ({region})")
+    
     try:
         # ВИПРАВЛЕНО: Визначаємо, чи це callback_query або звичайне повідомлення
         is_callback = hasattr(update, 'callback_query')
+        logger.info(f"Is callback: {is_callback}")
         
         if is_callback:
             # Якщо це callback від інлайн-кнопки
             query = update.callback_query
+            logger.info(f"Editing message for callback")
             await query.edit_message_text(
                 f"📅 Отримую прогноз для {settlement_name} ({region})...", 
                 parse_mode='Markdown'
@@ -907,6 +913,7 @@ async def process_3day_forecast(update: Update, context: ContextTypes.DEFAULT_TY
             message_to_edit = query.message
         else:
             # Якщо це звичайне повідомлення
+            logger.info(f"Sending new message")
             message = await update.message.reply_text(
                 f"📅 Отримую прогноз для {settlement_name} ({region})...", 
                 parse_mode='Markdown'
@@ -919,9 +926,11 @@ async def process_3day_forecast(update: Update, context: ContextTypes.DEFAULT_TY
         
         # Отримуємо координати
         lat, lon = settlements_db.get_coordinates(settlement_name, region)
+        logger.info(f"Coordinates: {lat}, {lon}")
         
         if not lat or not lon:
             error_msg = f"❌ Не знайдено координат для '{settlement_name}' ({region})"
+            logger.error(error_msg)
             if is_callback:
                 await update.callback_query.edit_message_text(error_msg, parse_mode='Markdown')
             else:
@@ -929,6 +938,7 @@ async def process_3day_forecast(update: Update, context: ContextTypes.DEFAULT_TY
             return
         
         # Отримуємо погоду з прогнозом на 3 дні
+        logger.info("Getting weather data from API...")
         weather_data = weather_api.get_weather(lat, lon, forecast_days=3)
         
         if not weather_data:
@@ -939,17 +949,22 @@ async def process_3day_forecast(update: Update, context: ContextTypes.DEFAULT_TY
                 f"• Тимчасовий збій сервісу\n"
                 f"• Спробуйте через хвилину"
             )
+            logger.error("Failed to get weather data")
             if is_callback:
                 await update.callback_query.edit_message_text(error_text, parse_mode='Markdown')
             else:
                 await update.message.reply_text(error_text, parse_mode='Markdown')
             return
         
+        logger.info(f"Weather data received, keys: {list(weather_data.keys())}")
+        
         # Отримуємо 3 повідомлення з прогнозом
         forecast_messages = weather_api.format_3day_forecast(settlement_name, region, weather_data)
+        logger.info(f"Forecast messages prepared: {len(forecast_messages) if forecast_messages else 0}")
         
         if not forecast_messages:
             error_text = f"❌ Помилка обробки прогнозу для {settlement_name}"
+            logger.error("No forecast messages generated")
             if is_callback:
                 await update.callback_query.edit_message_text(error_text, parse_mode='Markdown')
             else:
@@ -959,30 +974,30 @@ async def process_3day_forecast(update: Update, context: ContextTypes.DEFAULT_TY
         # ВИПРАВЛЕНО: Надсилаємо прогноз правильно
         if is_callback:
             # Для callback: редагуємо перше повідомлення, інші відправляємо новими
+            logger.info("Editing first message for callback")
             await query.edit_message_text(forecast_messages[0], parse_mode='Markdown')
             
             # Відправляємо інші повідомлення
-            for forecast_text in forecast_messages[1:]:
+            logger.info(f"Sending {len(forecast_messages)-1} additional messages")
+            for i, forecast_text in enumerate(forecast_messages[1:], 1):
                 await query.message.reply_text(forecast_text, parse_mode='Markdown')
             
-            # Це для відправки кнопок після прогнозу
-            chat_for_buttons = query.message.chat
-            message_id_for_reply = query.message.message_id
         else:
             # Для звичайних повідомлень
+            logger.info("Processing regular message")
             if hasattr(message_to_edit, 'edit_text'):
                 # Редагуємо перше повідомлення
+                logger.info("Editing existing message")
                 await message_to_edit.edit_text(forecast_messages[0], parse_mode='Markdown')
             else:
                 # Або відправляємо нове
+                logger.info("Sending new message")
                 await update.message.reply_text(forecast_messages[0], parse_mode='Markdown')
             
             # Відправляємо інші повідомлення
-            for forecast_text in forecast_messages[1:]:
+            logger.info(f"Sending {len(forecast_messages)-1} additional messages")
+            for i, forecast_text in enumerate(forecast_messages[1:], 1):
                 await update.message.reply_text(forecast_text, parse_mode='Markdown')
-            
-            chat_for_buttons = update.message.chat
-            message_id_for_reply = None
         
         # Додаємо кнопки під останнім повідомленням
         keyboard = [
@@ -999,6 +1014,7 @@ async def process_3day_forecast(update: Update, context: ContextTypes.DEFAULT_TY
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         # Надсилаємо повідомлення з кнопками
+        logger.info("Sending action buttons")
         if is_callback:
             await query.message.reply_text(
                 "👇 *Оберіть дію:*",
@@ -1021,7 +1037,8 @@ async def process_3day_forecast(update: Update, context: ContextTypes.DEFAULT_TY
         if hasattr(update, 'callback_query'):
             try:
                 await update.callback_query.edit_message_text(error_msg, parse_mode='Markdown')
-            except:
+            except Exception as edit_error:
+                logger.error(f"Failed to edit message: {edit_error}")
                 await update.callback_query.answer(error_msg)
         elif hasattr(update, 'message'):
             await update.message.reply_text(error_msg, parse_mode='Markdown')
