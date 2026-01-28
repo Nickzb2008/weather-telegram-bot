@@ -175,6 +175,8 @@ async def handle_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await show_regional_centers(update, context)
         
     elif text == "⭐️ Улюблені міста":
+        # Додаємо логування
+        logger.info("Showing favorites menu")
         await show_favorites(update, context)
         
     elif text == "📊 Статистика":
@@ -357,6 +359,24 @@ async def show_search_results(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ОБРОБНИКИ ІНЛАЙН-КНОПОК
 # ============================================================================
 
+async def test_favorites(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Тестова команда для перевірки улюблених"""
+    # Додаємо тестове місто
+    context.user_data['favorites'] = [
+        {'name': 'Київ', 'region': 'Київська'},
+        {'name': 'Львів', 'region': 'Львівська'},
+        {'name': 'Одеса', 'region': 'Одеська'}
+    ]
+    
+    await update.message.reply_text(
+        "✅ Тестові міста додані до улюблених!",
+        parse_mode='Markdown'
+    )
+    
+    # Показуємо улюблені
+    await show_favorites(update, context)
+
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробка натискання інлайн-кнопок"""
     query = update.callback_query
@@ -441,7 +461,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Error processing city button: {e}")
             await query.answer("❌ Помилка обробки запиту")
     
-    # Додавання до улюблених
+    # Додаємо в улюблені
     elif data == 'add_fav':
         try:
             # Отримуємо останнє місто з контексту
@@ -449,8 +469,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 settlement_name = context.user_data['last_city']
                 region = context.user_data['last_region']
                 
+                # Додаємо логування для перевірки
+                logger.info(f"Adding to favorites: {settlement_name} ({region})")
+                
                 # Перевіряємо, чи вже є в улюблених
                 favorites = context.user_data.get('favorites', [])
+                
+                # Додаємо логування поточного списку
+                logger.info(f"Current favorites: {favorites}")
+                
                 for fav in favorites:
                     if fav['name'] == settlement_name and fav['region'] == region:
                         await query.answer("✅ Це місто вже в улюблених!")
@@ -463,13 +490,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 })
                 context.user_data['favorites'] = favorites
                 
+                # Логування оновленого списку
+                logger.info(f"Updated favorites: {favorites}")
+                
                 await query.answer(f"✅ {settlement_name} додано до улюблених!")
             else:
+                logger.error("No last_city or last_region in context")
                 await query.answer("❌ Не вдалося додати до улюблених. Спочатку знайдіть місто.")
         except Exception as e:
-            logger.error(f"Error adding to favorites: {e}")
+            logger.error(f"Error adding to favorites: {e}", exc_info=True)
             await query.answer("❌ Помилка додавання до улюблених")
-    
+
     # Видалення з улюблених
     elif data.startswith('remove_fav_'):
         try:
@@ -643,53 +674,43 @@ async def show_regional_centers(update: Update, context: ContextTypes.DEFAULT_TY
 # УЛЮБЛЕНІ МІСТА
 # ============================================================================
 
-async def show_favorites(update_or_query, context: ContextTypes.DEFAULT_TYPE):
-    """Показати улюблені міста (працює зі звичайним update або query)"""
-    # Визначаємо, що ми отримали: update чи query
-    if hasattr(update_or_query, 'callback_query'):
-        # Якщо це query з callback
-        query = update_or_query.callback_query
-        message_func = query.edit_message_text
-        has_message = True
-    elif hasattr(update_or_query, 'edit_message_text'):
-        # Якщо це напряму query
-        query = update_or_query
-        message_func = query.edit_message_text
-        has_message = True
-    else:
-        # Якщо це звичайний update
-        update = update_or_query
-        message_func = update.message.reply_text if hasattr(update, 'message') else update.reply_text
-        has_message = hasattr(update, 'message')
-    
+async def show_favorites(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показати улюблені міста"""
     favorites = context.user_data.get('favorites', [])
     
     if not favorites:
-        text = (
-            "⭐️ *Улюблені міста*\n\n"
-            "У вас ще немає улюблених міст.\n\n"
-            "Додайте місто до улюблених, щоб швидко отримувати погоду."
-        )
-        
-        if has_message:
-            await message_func(text, parse_mode='Markdown')
+        # Якщо немає улюблених
+        if hasattr(update, 'message'):
+            await update.message.reply_text(
+                "⭐️ *Улюблені міста*\n\n"
+                "У вас ще немає улюблених міст.\n\n"
+                "Додайте місто до улюблених, щоб швидко отримувати погоду.",
+                parse_mode='Markdown',
+                reply_markup=get_main_keyboard()
+            )
+        elif hasattr(update, 'edit_message_text'):
+            # Якщо це callback query
+            await update.edit_message_text(
+                "⭐️ *Улюблені міста*\n\n"
+                "У вас ще немає улюблених міст.\n\n"
+                "Додайте місто до улюблених, щоб швидко отримувати погоду.",
+                parse_mode='Markdown'
+            )
         return
     
+    # Формуємо текст з улюбленими містами
     favorites_text = "⭐️ *Ваші улюблені міста:*\n\n"
     for i, fav in enumerate(favorites, 1):
         favorites_text += f"{i}. {fav['name']} ({fav['region']})\n"
     
     # Створюємо кнопки
     keyboard = []
-    for i, fav in enumerate(favorites[:5], 1):  # Обмежуємо 5 містами
+    for i, fav in enumerate(favorites, 1):
         row = [
             InlineKeyboardButton(f"🌤 {fav['name']}", callback_data=f"current_{i}"),
             InlineKeyboardButton("🗑", callback_data=f"remove_fav_{i}")
         ]
         keyboard.append(row)
-    
-    if len(favorites) > 5:
-        keyboard.append([InlineKeyboardButton("📄 Показати ще", callback_data="show_more_favs")])
     
     keyboard.append([InlineKeyboardButton("🗑 Очистити улюблені", callback_data="clear_favorites")])
     keyboard.append([InlineKeyboardButton("↩️ Назад", callback_data="back_to_menu")])
@@ -700,8 +721,23 @@ async def show_favorites(update_or_query, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['last_search_results'] = favorites
     context.user_data['last_search_action'] = 'current'
     
-    if has_message:
-        await message_func(
+    # Відправляємо повідомлення
+    if hasattr(update, 'message'):
+        await update.message.reply_text(
+            favorites_text + "\n👇 *Оберіть місто:*",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+    elif hasattr(update, 'edit_message_text'):
+        # Якщо це callback query
+        await update.edit_message_text(
+            favorites_text + "\n👇 *Оберіть місто:*",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+    else:
+        # Якщо це просто query (з button_handler)
+        await update.edit_message_text(
             favorites_text + "\n👇 *Оберіть місто:*",
             parse_mode='Markdown',
             reply_markup=reply_markup
@@ -1293,6 +1329,17 @@ async def start_command_for_callback(query, context):
         reply_markup=get_main_keyboard()
     )
 
+async def debug_context(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Функція для налагодження контексту"""
+    user_data = context.user_data
+    logger.info(f"User data: {user_data}")
+    
+    if hasattr(update, 'callback_query'):
+        query = update.callback_query
+        await query.answer(f"Контекст: {list(user_data.keys())}")
+    elif hasattr(update, 'message'):
+        await update.message.reply_text(f"Контекст: {list(user_data.keys())}")
+
 
 
 
@@ -1343,7 +1390,9 @@ def main():
         # Додавання обробників команд
         application.add_handler(CommandHandler("start", start_command))
         application.add_handler(CommandHandler("help", help_command))
-        
+        application.add_handler(CommandHandler("debug", debug_context))  # Додайте цей рядок
+        application.add_handler(CommandHandler("testfav", test_favorites))
+
         # Обробник кнопок меню
         application.add_handler(MessageHandler(
             filters.TEXT & filters.Regex(r'^(🌤|📅|🔍|🏙|⭐️|📊|❓|↩️)'), 
