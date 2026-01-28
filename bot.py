@@ -1392,6 +1392,7 @@ def main():
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("debug", debug_context))  # Додайте цей рядок
         application.add_handler(CommandHandler("testfav", test_favorites))
+        
 
         # Обробник кнопок меню
         application.add_handler(MessageHandler(
