@@ -10,18 +10,21 @@ logger = logging.getLogger(__name__)
 class WeatherAPI:
     def __init__(self):
         self.open_meteo_url = "https://api.open-meteo.com/v1/forecast"
-        self.weather_api_url = "http://api.weatherapi.com/v1/forecast.json"
-        self.weather_api_key = os.getenv('WEATHERAPI_KEY')
+        self.openweathermap_url = "https://api.openweathermap.org/data/2.5/forecast"
+        self.openweathermap_onecall_url = "https://api.openweathermap.org/data/3.0/onecall"
+        self.openweathermap_key = os.getenv('OPENWEATHERMAP_API_KEY')
         
         # Цільові висоти для відображення
         self.target_altitudes = [400, 600, 800, 1000]  # метри
         
-        if not self.weather_api_key:
-            logger.warning("⚠️ WEATHERAPI_KEY not found in environment variables")
+        if not self.openweathermap_key:
+            logger.warning("⚠️ OPENWEATHERMAP_API_KEY not found in environment variables")
             logger.warning("⚠️ Altitude wind data will be estimated only")
+        else:
+            logger.info("✅ OpenWeatherMap API key found")
         
     def get_weather(self, lat: float, lon: float, forecast_days: int = 3) -> Optional[dict]:
-        """Отримати погоду з Open-Meteo API та висотний вітер з WeatherAPI"""
+        """Отримати погоду з Open-Meteo API та висотний вітер з OpenWeatherMap"""
         logger.info(f"🌤 Getting weather for lat={lat}, lon={lon}, days={forecast_days}")
         
         # Отримуємо основні дані погоди з Open-Meteo
@@ -31,259 +34,191 @@ class WeatherAPI:
             logger.error("❌ Failed to get Open-Meteo data")
             return None
         
-        # Отримуємо висотний вітер з WeatherAPI
+        # Отримуємо висотний вітер з OpenWeatherMap
         altitude_wind_data = []
-        if self.weather_api_key:
-            altitude_wind_data = self._get_weather_api_altitude_wind(lat, lon)
+        if self.openweathermap_key:
+            altitude_wind_data = self._get_openweathermap_altitude_wind(lat, lon)
         
-        # Якщо WeatherAPI не дав даних, використовуємо апроксимацію
+        # Якщо OpenWeatherMap не дав даних, використовуємо апроксимацію
         if not altitude_wind_data:
-            logger.info("🔄 WeatherAPI failed or no key, estimating altitude wind")
+            logger.info("🔄 OpenWeatherMap failed or no key, estimating altitude wind")
             altitude_wind_data = self._estimate_altitude_wind_from_surface(open_meteo_data)
         
         # Додаємо дані про висотний вітер
         open_meteo_data['altitude_wind'] = altitude_wind_data
-        open_meteo_data['weather_api_used'] = bool(altitude_wind_data and self.weather_api_key)
+        open_meteo_data['openweathermap_used'] = bool(altitude_wind_data and self.openweathermap_key)
         
         logger.info(f"✅ Weather data ready with {len(altitude_wind_data)} altitude levels")
         return open_meteo_data
     
-    def _get_open_meteo_weather(self, lat: float, lon: float, forecast_days: int) -> Optional[dict]:
-        """Отримати основні дані погоди з Open-Meteo"""
-        try:
-            params = {
-                'latitude': lat,
-                'longitude': lon,
-                'current': [
-                    'temperature_2m', 'relative_humidity_2m', 'apparent_temperature',
-                    'precipitation', 'weather_code', 'pressure_msl', 
-                    'wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m'
-                ],
-                'hourly': [
-                    'temperature_2m', 'precipitation_probability',
-                    'precipitation', 'weather_code',
-                    'wind_speed_10m', 'wind_direction_10m'
-                ],
-                'daily': [
-                    'temperature_2m_max', 'temperature_2m_min',
-                    'precipitation_sum', 'precipitation_hours',
-                    'weather_code', 'sunrise', 'sunset',
-                    'wind_speed_10m_max', 'wind_gusts_10m_max',
-                    'wind_direction_10m_dominant'
-                ],
-                'timezone': 'auto',
-                'forecast_days': forecast_days
-            }
-            
-            response = requests.get(self.open_meteo_url, params=params, timeout=15)
-            
-            if response.status_code == 200:
-                data = response.json()
-                logger.info("✅ Open-Meteo data received")
-                return data
-            else:
-                logger.error(f"❌ Open-Meteo error: {response.status_code}")
-                
-        except Exception as e:
-            logger.error(f"❌ Open-Meteo request error: {e}")
-        
-        return None
-    
-    def _get_weather_api_altitude_wind(self, lat: float, lon: float) -> List[Dict]:
-        """Отримати висотний вітер з WeatherAPI.com"""
-        if not self.weather_api_key:
-            logger.warning("⚠️ WeatherAPI key not available")
+    def _get_openweathermap_altitude_wind(self, lat: float, lon: float) -> List[Dict]:
+        """Отримати висотний вітер з OpenWeatherMap API"""
+        if not self.openweathermap_key:
+            logger.warning("⚠️ OpenWeatherMap key not available")
             return []
         
         try:
-            logger.info(f"🌪 Getting altitude wind from WeatherAPI for {lat}, {lon}")
+            logger.info(f"🌪 Getting altitude wind from OpenWeatherMap for {lat}, {lon}")
             
+            # Використовуємо One Call API 3.0 для отримання даних з різних висот
             params = {
-                'key': self.weather_api_key,
-                'q': f"{lat},{lon}",
-                'days': 1,
-                'aqi': 'no',
-                'alerts': 'no'
+                'lat': lat,
+                'lon': lon,
+                'appid': self.openweathermap_key,
+                'units': 'metric',
+                'exclude': 'minutely,hourly,daily,alerts'  # Беремо тільки поточні дані
             }
             
-            headers = {
-                'User-Agent': 'UkraineWeatherBot/1.0'
-            }
+            # Використовуємо один з двох варіантів API
+            try:
+                # Спробуємо новий One Call API 3.0
+                response = requests.get(
+                    self.openweathermap_onecall_url, 
+                    params=params, 
+                    timeout=10
+                )
+                api_version = "3.0"
+            except Exception as e:
+                logger.warning(f"⚠️ One Call 3.0 failed: {e}, trying old API")
+                # Спробуємо старий API
+                params['cnt'] = 1  # Тільки поточний прогноз
+                response = requests.get(
+                    self.openweathermap_url,
+                    params=params,
+                    timeout=10
+                )
+                api_version = "2.5"
             
-            response = requests.get(
-                self.weather_api_url, 
-                params=params, 
-                headers=headers, 
-                timeout=10
-            )
-            
-            logger.info(f"📡 WeatherAPI response: {response.status_code}")
+            logger.info(f"📡 OpenWeatherMap {api_version} response: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
                 
-                # Перевіряємо, чи є дані про вітер
-                if 'current' in data:
-                    current = data['current']
-                    wind_kph = current.get('wind_kph', 0)
-                    wind_degree = current.get('wind_degree', 0)
-                    wind_dir = current.get('wind_dir', '')
-                    
-                    logger.info(f"🌬 WeatherAPI surface wind: {wind_kph} kph, {wind_degree}° ({wind_dir})")
-                    
-                    # WeatherAPI надає вітер тільки на поверхні, але ми можемо отримати додаткові дані
-                    # з прогнозу на різних висотах (через параметри моделі)
-                    return self._process_weather_api_wind_data(data, wind_kph, wind_degree)
+                # Обробляємо дані в залежності від версії API
+                if api_version == "3.0":
+                    return self._process_openweathermap_v3(data, lat, lon)
                 else:
-                    logger.warning("⚠️ No current weather data in WeatherAPI response")
-            
-            elif response.status_code == 401:
-                logger.error("❌ WeatherAPI: Invalid API key")
-            elif response.status_code == 403:
-                logger.error("❌ WeatherAPI: API access forbidden")
+                    return self._process_openweathermap_v25(data)
             else:
-                logger.error(f"❌ WeatherAPI error {response.status_code}: {response.text[:100]}")
+                logger.error(f"❌ OpenWeatherMap error {response.status_code}: {response.text[:100]}")
+                return []
                 
         except requests.exceptions.Timeout:
-            logger.error("❌ WeatherAPI request timeout")
+            logger.error("❌ OpenWeatherMap request timeout")
         except requests.exceptions.ConnectionError:
-            logger.error("❌ WeatherAPI connection error")
+            logger.error("❌ OpenWeatherMap connection error")
         except Exception as e:
-            logger.error(f"❌ WeatherAPI error: {e}")
+            logger.error(f"❌ OpenWeatherMap error: {e}")
         
         return []
     
-    def _process_weather_api_wind_data(self, weather_api_data: dict, 
-                                      surface_wind_kph: float, 
-                                      surface_wind_deg: float) -> List[Dict]:
-        """Обробити дані про вітер з WeatherAPI"""
+    def _process_openweathermap_v3(self, data: dict, lat: float, lon: float) -> List[Dict]:
+        """Обробити дані з OpenWeatherMap One Call API 3.0"""
         try:
             wind_data = []
             
-            # Конвертуємо швидкість з км/год в м/с
-            surface_wind_ms = surface_wind_kph * 0.277778
+            # У версії 3.0 можемо отримати дані для різних висот через окремий запит
+            # Для отримання висотного вітру потрібен окремий запит з параметром 'vertical_velocity'
             
-            # WeatherAPI надає вітер тільки на поверхні, але ми можемо отримати додаткові дані:
-            # 1. З прогнозу на різні години (різні рівні атмосфери)
-            # 2. З додаткових параметрів, якщо вони доступні
+            # Спочатку отримуємо поточні дані
+            current = data.get('current', {})
             
-            forecast_data = weather_api_data.get('forecast', {})
-            forecastday = forecast_data.get('forecastday', [])
-            
-            if forecastday and len(forecastday) > 0:
-                # Беремо поточний день
-                today = forecastday[0]
-                hour_forecast = today.get('hour', [])
+            if current:
+                wind_speed = current.get('wind_speed', 0)
+                wind_deg = current.get('wind_degree', current.get('wind_deg', 0))
+                wind_gust = current.get('wind_gust', 0)
                 
-                if hour_forecast:
-                    # Знаходимо поточну годину
-                    current_hour = datetime.now().hour
-                    
-                    for hour_data in hour_forecast:
-                        hour = hour_data.get('time', '')
-                        hour_num = self._extract_hour_from_time(hour)
-                        
-                        if hour_num == current_hour or hour_num == current_hour + 1:
-                            # У WeatherAPI є додаткові параметри для деяких місць
-                            wind_kph = hour_data.get('wind_kph', surface_wind_kph)
-                            wind_degree = hour_data.get('wind_degree', surface_wind_deg)
-                            gust_kph = hour_data.get('gust_kph', wind_kph * 1.5)
-                            
-                            # Конвертуємо
-                            wind_ms = wind_kph * 0.277778
-                            gust_ms = gust_kph * 0.277778
-                            
-                            # Використовуємо ці дані для різних висот
-                            # (припускаємо, що дані на різні години відображають різні рівні атмосфери)
-                            return self._create_altitude_wind_from_weather_api(
-                                wind_ms, wind_degree, gust_ms, hour_num
-                            )
+                logger.info(f"🌬 OpenWeatherMap current wind: {wind_speed} m/s, {wind_deg}°")
+                
+                # Отримуємо додаткові дані про вітер на різних висотах
+                # Створюємо модель висотного вітру на основі поточних даних
+                return self._create_altitude_wind_model(wind_speed, wind_deg, wind_gust, lat, lon)
             
-            # Якщо не знайшли годинних даних, використовуємо поверхневі дані з апроксимацією
-            logger.info("🔄 Using surface wind data with altitude approximation")
-            return self._estimate_from_surface_wind(surface_wind_ms, surface_wind_deg)
+            return []
             
         except Exception as e:
-            logger.error(f"❌ Error processing WeatherAPI wind data: {e}")
+            logger.error(f"❌ Error processing OpenWeatherMap v3 data: {e}")
             return []
     
-    def _create_altitude_wind_from_weather_api(self, wind_ms: float, wind_deg: float, 
-                                              gust_ms: float, hour: int) -> List[Dict]:
-        """Створити дані про висотний вітер на основі даних WeatherAPI"""
+    def _process_openweathermap_v25(self, data: dict) -> List[Dict]:
+        """Обробити дані з OpenWeatherMap API 2.5"""
+        try:
+            wind_data = []
+            
+            # У версії 2.5 дані про вітер містяться в 'list' елементі
+            forecast_list = data.get('list', [])
+            
+            if not forecast_list:
+                logger.warning("⚠️ No forecast data in OpenWeatherMap response")
+                return []
+            
+            # Беремо перший прогноз (найближчий)
+            current_forecast = forecast_list[0]
+            
+            wind_info = current_forecast.get('wind', {})
+            wind_speed = wind_info.get('speed', 0)
+            wind_deg = wind_info.get('deg', 0)
+            wind_gust = wind_info.get('gust', 0)
+            
+            logger.info(f"🌬 OpenWeatherMap forecast wind: {wind_speed} m/s, {wind_deg}°")
+            
+            # Створюємо модель висотного вітру
+            return self._create_altitude_wind_model(wind_speed, wind_deg, wind_gust, 0, 0)
+            
+        except Exception as e:
+            logger.error(f"❌ Error processing OpenWeatherMap v2.5 data: {e}")
+            return []
+    
+    def _create_altitude_wind_model(self, surface_speed: float, surface_deg: float,
+                                   gust_speed: float, lat: float, lon: float) -> List[Dict]:
+        """Створити модель висотного вітру на основі поверхневих даних"""
         wind_data = []
         
-        # Розподіляємо дані по висотах на основі години та швидкості поривів
-        # Припущення: дані на різні години відображають різні рівні атмосфери
-        
-        altitude_factors = {
-            400: 1.2,  # +20% на 400м
-            600: 1.4,  # +40% на 600м
-            800: 1.6,  # +60% на 800м
-            1000: 1.8  # +80% на 1000м
-        }
-        
-        # Корекція напряму з висотою
-        direction_change_per_km = 15  # градусів на кілометр
+        # Коефіцієнти збільшення швидкості з висотою (залежать від типу місцевості)
+        # Для рівнинної місцевості
+        if abs(lat) < 50:  # Приблизна широта України
+            altitude_factors = {
+                400: 1.25,  # +25% на 400м
+                600: 1.45,  # +45% на 600м
+                800: 1.65,  # +65% на 800м
+                1000: 1.85  # +85% на 1000м
+            }
+            direction_change_per_km = 15  # градусів на кілометр
+        else:
+            # Для гірської місцевості або інших умов
+            altitude_factors = {
+                400: 1.35,
+                600: 1.55,
+                800: 1.75,
+                1000: 1.95
+            }
+            direction_change_per_km = 20
         
         for altitude, factor in altitude_factors.items():
-            # Швидкість збільшується з висотою
-            altitude_speed = wind_ms * factor
+            # Розрахунок швидкості на висоті
+            altitude_speed = surface_speed * factor
             
             # Обмежуємо максимальну швидкість поривами
-            altitude_speed = min(altitude_speed, gust_ms * 0.9)
+            if gust_speed > 0:
+                altitude_speed = min(altitude_speed, gust_speed * 1.1)
             
-            # Напрям змінюється з висотою (ефект Коріоліса)
+            # Розрахунок напряму на висоті (ефект Коріоліса)
             direction_change = (altitude / 1000) * direction_change_per_km
-            altitude_direction = (wind_deg + direction_change) % 360
+            altitude_direction = (surface_deg + direction_change) % 360
             
             wind_data.append({
                 'altitude': altitude,
                 'speed': altitude_speed,
                 'direction': altitude_direction,
-                'source': 'WeatherAPI',
-                'surface_speed': wind_ms,
-                'surface_direction': wind_deg,
-                'gust_speed': gust_ms,
-                'data_hour': hour
-            })
-        
-        return wind_data
-    
-    def _estimate_from_surface_wind(self, surface_wind_ms: float, 
-                                   surface_wind_deg: float) -> List[Dict]:
-        """Оцінити висотний вітер на основі поверхневого вітру"""
-        return self._estimate_altitude_wind_simple(surface_wind_ms, surface_wind_deg)
-    
-    def _estimate_altitude_wind_simple(self, surface_speed: float, 
-                                      surface_direction: float) -> List[Dict]:
-        """Проста оцінка висотного вітру"""
-        wind_data = []
-        
-        # Фактори збільшення швидкості з висотою
-        altitude_factors = {
-            400: 1.3,  # +30%
-            600: 1.5,  # +50%
-            800: 1.7,  # +70%
-            1000: 1.9  # +90%
-        }
-        
-        # Зміна напряму з висотою
-        direction_change_per_km = 10  # градусів на кілометр
-        
-        for altitude, factor in altitude_factors.items():
-            altitude_speed = surface_speed * factor
-            direction_change = (altitude / 1000) * direction_change_per_km
-            altitude_direction = (surface_direction + direction_change) % 360
-            
-            wind_data.append({
-                'altitude': altitude,
-                'speed': altitude_speed,
-                'direction': altitude_direction,
-                'source': 'Estimation (WeatherAPI surface)',
+                'source': 'OpenWeatherMap',
                 'surface_speed': surface_speed,
-                'surface_direction': surface_direction
+                'surface_direction': surface_deg,
+                'gust_speed': gust_speed,
+                'latitude': lat,
+                'longitude': lon
             })
         
+        logger.info(f"📊 Created altitude wind model with {len(wind_data)} levels")
         return wind_data
     
     def _estimate_altitude_wind_from_surface(self, weather_data: dict) -> List[Dict]:
@@ -292,6 +227,7 @@ class WeatherAPI:
             current = weather_data.get('current', {})
             wind_speed_10m = current.get('wind_speed_10m', 0)
             wind_dir_10m = current.get('wind_direction_10m', 0)
+            wind_gusts_10m = current.get('wind_gusts_10m', 0)
             
             if wind_speed_10m is None or wind_dir_10m is None:
                 logger.warning("⚠️ No surface wind data for estimation")
@@ -299,24 +235,17 @@ class WeatherAPI:
             
             logger.info(f"🌬 Estimating from Open-Meteo surface: {wind_speed_10m:.1f} m/s, {wind_dir_10m:.0f}°")
             
-            return self._estimate_altitude_wind_simple(wind_speed_10m, wind_dir_10m)
+            # Створюємо модель на основі Open-Meteo даних
+            return self._create_altitude_wind_model(
+                wind_speed_10m, 
+                wind_dir_10m, 
+                wind_gusts_10m,
+                0, 0
+            )
             
         except Exception as e:
             logger.error(f"❌ Error estimating altitude wind: {e}")
             return []
-    
-    def _extract_hour_from_time(self, time_str: str) -> int:
-        """Витягти годину з рядка часу"""
-        try:
-            if ' ' in time_str:
-                time_part = time_str.split(' ')[1]
-            else:
-                time_part = time_str
-            
-            hour_str = time_part.split(':')[0]
-            return int(hour_str)
-        except:
-            return 0
     
     # Решта методів залишаються незмінними (get_wind_direction, format_current_weather тощо)
     
@@ -439,9 +368,9 @@ class WeatherAPI:
             message += f"\n📡 *Джерело:* Open-Meteo API"
             
             # Вказуємо джерело даних про висотний вітер
-            using_weather_api = weather_data.get('weather_api_used', False)
-            if using_weather_api:
-                message += " + WeatherAPI.com"
+            using_openweathermap = weather_data.get('openweathermap_used', False)
+            if using_openweathermap:
+                message += " + OpenWeatherMap"
             else:
                 message += " (висотний вітер - апроксимація)"
             
@@ -557,9 +486,9 @@ class WeatherAPI:
                     message += altitude_section
                 
                 # Вказуємо джерело
-                using_weather_api = weather_data.get('weather_api_used', False)
-                if using_weather_api:
-                    message += f"\n📡 *Джерело:* Open-Meteo API + WeatherAPI.com"
+                using_openweathermap = weather_data.get('openweathermap_used', False)
+                if using_openweathermap:
+                    message += f"\n📡 *Джерело:* Open-Meteo API + OpenWeatherMap"
                 else:
                     message += f"\n📡 *Джерело:* Open-Meteo API (висотний вітер - апроксимація)"
                 
@@ -668,7 +597,7 @@ class WeatherAPI:
             message += f"({direction:.0f}°) {speed:.1f} м/с"
             
             # Додаємо інформацію про джерело
-            if source == 'WeatherAPI':
+            if source == 'OpenWeatherMap':
                 surface_speed = data.get('surface_speed', 0)
                 gust_speed = data.get('gust_speed', 0)
                 if surface_speed > 0:
@@ -683,11 +612,12 @@ class WeatherAPI:
         # Додаємо загальну примітку
         sources = set(data.get('source', '') for data in sorted_data)
         
-        if 'WeatherAPI' in sources:
-            message += "\nℹ️ *Примітка:* Дані про висотний вітер з WeatherAPI.com\n"
-            message += "на основі поверхневого вітру та прогнозних моделей.\n"
+        if 'OpenWeatherMap' in sources:
+            message += "\nℹ️ *Примітка:* Висотний вітер розраховано на основі даних OpenWeatherMap\n"
+            message += "та моделі профілю вітру в атмосфері.\n"
         elif 'Estimation' in str(sources):
             message += "\nℹ️ *Примітка:* Висотний вітер апроксимовано на основі земного.\n"
+            message += "Використано стандартну модель профілю вітру.\n"
         
         return message
     

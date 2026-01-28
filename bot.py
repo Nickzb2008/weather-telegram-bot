@@ -40,6 +40,20 @@ print(f"✅ TELEGRAM_TOKEN: OK")
 print("✅ OPEN-METEO: FREE TIER (no API key needed)")
 print("=" * 60)
 
+
+
+print(f"✅ TELEGRAM_TOKEN: OK")
+OPENWEATHERMAP_API_KEY = os.getenv('OPENWEATHERMAP_API_KEY')
+if OPENWEATHERMAP_API_KEY:
+    print(f"✅ OPENWEATHERMAP API: ENABLED")
+else:
+    print(f"⚠️ OPENWEATHERMAP API: DISABLED (no API key)")
+print("✅ OPEN-METEO: FREE TIER (no API key needed)")
+print("=" * 60)
+
+
+
+
 # Імпорт бібліотек
 try:
     import requests
