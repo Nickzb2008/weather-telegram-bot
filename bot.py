@@ -7,6 +7,33 @@ import asyncio
 from typing import Dict, List, Optional, Tuple
 import math
 
+# ============================================================================
+# ФІКС ДЛЯ ASYNCIO В ПОТОКАХ
+# ============================================================================
+
+import asyncio
+import signal
+
+def _disable_signal_handlers():
+    """Вимкнути обробку сигналів для уникнення помилок у потоках"""
+    # Вимкнути стандартні обробники сигналів
+    try:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.remove_signal_handler(sig)
+            except (NotImplementedError, ValueError):
+                # Якщо не підтримується - ігноруємо
+                pass
+    except:
+        pass
+
+# Викликаємо при імпорті
+_disable_signal_handlers()
+
+
+
 # Налаштування логування
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -890,6 +917,17 @@ def main():
     try:
         print("🚀 Creating Telegram application...")
         
+        # Створюємо event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Додатково вимикаємо обробку сигналів
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.remove_signal_handler(sig)
+            except:
+                pass
+        
         application = Application.builder().token(TELEGRAM_TOKEN).build()
         
         # Додавання обробників команд
@@ -913,12 +951,14 @@ def main():
         print("✅ Open-Meteo API: Ready")
         print("🚀 Starting bot polling...")
         
-        application.run_polling(
+        # Запускаємо з вимкненими сигналами
+        loop.run_until_complete(application.run_polling(
             drop_pending_updates=True,
             timeout=30,
             pool_timeout=30,
-            allowed_updates=Update.ALL_TYPES
-        )
+            allowed_updates=None,
+            close_loop=False  # Не закривати loop після зупинки
+        ))
         
     except Exception as e:
         print(f"❌ Error: {e}")
