@@ -3,23 +3,24 @@ import math
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
 class WeatherAPI:
     def __init__(self):
         self.open_meteo_url = "https://api.open-meteo.com/v1/forecast"
+        self.weather_gov_url = "https://api.weather.gov"
         
-        # Використовуємо Open-Meteo для висотного вітру (безкоштовно)
-        # Open-Meteo надає вітер на 10м, 80м, 100м, 120м, 180м у безкоштовному тарифі
+        # Цільові висоти для відображення
+        self.target_altitudes = [400, 600, 800, 1000]  # метри
         
-        # Відповідність рівнів до висоти:
-        self.wind_levels = {
-            '10m': 10,
-            '80m': 80,    # ~400-500м фактично
-            '100m': 100,  # ~600-700м фактично
-            '120m': 120,  # ~700-800м фактично
-            '180m': 180   # ~800-1000м фактично
+        # Маппінг висот Open-Meteo до наших цільових висот
+        self.open_meteo_altitude_map = {
+            '80m': 400,   # ~400м
+            '100m': 600,  # ~600м
+            '120m': 800,  # ~800м
+            '180m': 1000  # ~1000м
         }
     
     def get_weather(self, lat: float, lon: float, forecast_days: int = 3) -> Optional[dict]:
@@ -27,7 +28,7 @@ class WeatherAPI:
         logger.info(f"🌤 Getting weather for lat={lat}, lon={lon}, days={forecast_days}")
         
         try:
-            # Запит з даними про вітер на різних висотах
+            # Запит з максимальною кількістю параметрів для висотного вітру
             params = {
                 'latitude': lat,
                 'longitude': lon,
@@ -39,8 +40,9 @@ class WeatherAPI:
                 'hourly': [
                     'temperature_2m', 'precipitation_probability',
                     'precipitation', 'weather_code',
-                    # Вітер на різних висотах
+                    # Земний вітер
                     'wind_speed_10m', 'wind_direction_10m',
+                    # Вітер на висотах (Open-Meteo)
                     'wind_speed_80m', 'wind_direction_80m',
                     'wind_speed_100m', 'wind_direction_100m',
                     'wind_speed_120m', 'wind_direction_120m',
@@ -57,34 +59,51 @@ class WeatherAPI:
                 'forecast_days': forecast_days
             }
             
-            logger.info(f"🌍 Open-Meteo URL: {self.open_meteo_url}")
+            logger.info(f"🌍 Requesting Open-Meteo data...")
             
-            response = requests.get(self.open_meteo_url, params=params, timeout=15)
-            logger.info(f"📡 Open-Meteo response status: {response.status_code}")
+            response = requests.get(self.open_meteo_url, params=params, timeout=20)
+            logger.info(f"📡 Open-Meteo response: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
-                logger.info(f"✅ Open-Meteo data received")
+                logger.info(f"✅ Open-Meteo data received successfully")
                 
-                # Додаємо оброблені дані про вітер на висотах
-                altitude_wind_data = self._extract_altitude_wind_data(data)
+                # Перевіряємо, чи отримали дані про висотний вітер
+                hourly = data.get('hourly', {})
+                has_altitude_wind = any(key in hourly for key in ['wind_speed_80m', 'wind_speed_100m'])
+                
+                if has_altitude_wind:
+                    logger.info("✅ Found altitude wind data in Open-Meteo response")
+                    # Екстрактуємо дані про висотний вітер
+                    altitude_wind_data = self._extract_open_meteo_altitude_wind(data)
+                else:
+                    logger.warning("⚠️ No altitude wind data in Open-Meteo, using estimation")
+                    # Якщо немає даних про висотний вітер, використовуємо апроксимацію
+                    altitude_wind_data = self._estimate_altitude_wind_from_surface(data)
+                
+                # Додаємо дані про висотний вітер до основного об'єкта
                 if altitude_wind_data:
                     data['altitude_wind'] = altitude_wind_data
-                    logger.info(f"✅ Extracted wind data for {len(altitude_wind_data)} altitudes")
+                    logger.info(f"✅ Added wind data for {len(altitude_wind_data)} altitude levels")
+                else:
+                    logger.warning("⚠️ Could not get any altitude wind data")
+                    data['altitude_wind'] = []
                 
                 return data
             else:
-                # Спрощений запит, якщо перший не працює
-                logger.error(f"❌ Detailed request failed, trying simplified")
-                return self._get_simplified_weather(lat, lon, forecast_days)
+                logger.error(f"❌ Open-Meteo API error: {response.status_code}")
+                # Спрощений запит як запасний варіант
+                return self._get_fallback_weather(lat, lon, forecast_days)
                 
         except Exception as e:
-            logger.error(f"❌ Open-Meteo error: {e}")
-            return self._get_simplified_weather(lat, lon, forecast_days)
+            logger.error(f"❌ Error getting weather data: {e}", exc_info=True)
+            return self._get_fallback_weather(lat, lon, forecast_days)
     
-    def _get_simplified_weather(self, lat: float, lon: float, forecast_days: int = 3) -> Optional[dict]:
-        """Спрощений запит без даних про висотний вітер"""
+    def _get_fallback_weather(self, lat: float, lon: float, forecast_days: int = 3) -> Optional[dict]:
+        """Запасний варіант зі спрощеним запитом"""
         try:
+            logger.info("🔄 Trying fallback weather request")
+            
             params = {
                 'latitude': lat,
                 'longitude': lon,
@@ -109,65 +128,123 @@ class WeatherAPI:
                 'forecast_days': forecast_days
             }
             
-            response = requests.get(self.open_meteo_url, params=params, timeout=10)
+            response = requests.get(self.open_meteo_url, params=params, timeout=15)
             
             if response.status_code == 200:
-                logger.info("✅ Simplified weather data received")
-                return response.json()
-            else:
-                logger.error(f"❌ Simplified request failed: {response.status_code}")
-                return None
+                data = response.json()
+                logger.info("✅ Fallback weather data received")
                 
+                # Оцінюємо висотний вітер на основі земного
+                altitude_wind_data = self._estimate_altitude_wind_from_surface(data)
+                data['altitude_wind'] = altitude_wind_data if altitude_wind_data else []
+                
+                return data
+            
         except Exception as e:
-            logger.error(f"❌ Simplified request error: {e}")
-            return None
+            logger.error(f"❌ Fallback request error: {e}")
+        
+        return None
     
-    def _extract_altitude_wind_data(self, weather_data: dict) -> List[Dict]:
-        """Витягти дані про вітер на різних висотах з Open-Meteo"""
+    def _extract_open_meteo_altitude_wind(self, weather_data: dict) -> List[Dict]:
+        """Витягти дані про вітер на висотах з відповіді Open-Meteo"""
         try:
             hourly = weather_data.get('hourly', {})
-            if not hourly:
+            if not hourly or 'time' not in hourly:
+                logger.warning("⚠️ No hourly data available")
                 return []
             
-            # Беремо дані для поточної години
+            # Визначаємо поточну годину для отримання актуальних даних
             current_hour = datetime.now().hour
-            hour_index = min(current_hour, len(hourly.get('time', [])) - 1) if hourly.get('time') else 0
+            hour_index = min(current_hour, len(hourly['time']) - 1) if hourly['time'] else 0
+            
+            logger.info(f"⏰ Using hour index {hour_index} (current hour: {current_hour})")
             
             wind_data = []
             
-            # Перевіряємо доступність даних для кожної висоти
-            altitude_mapping = [
-                ('80m', 400, 'wind_speed_80m', 'wind_direction_80m'),
-                ('100m', 600, 'wind_speed_100m', 'wind_direction_100m'),
-                ('120m', 800, 'wind_speed_120m', 'wind_direction_120m'),
-                ('180m', 1000, 'wind_speed_180m', 'wind_direction_180m'),
-            ]
-            
-            for level_name, altitude, speed_key, dir_key in altitude_mapping:
-                if (speed_key in hourly and dir_key in hourly and 
-                    len(hourly[speed_key]) > hour_index and len(hourly[dir_key]) > hour_index):
-                    
-                    wind_speed = hourly[speed_key][hour_index]
-                    wind_direction = hourly[dir_key][hour_index]
-                    
-                    if wind_speed is not None and wind_direction is not None:
-                        wind_data.append({
-                            'altitude': altitude,
-                            'level': level_name,
-                            'speed': wind_speed,
-                            'direction': wind_direction,
-                            'direction_text': self.get_wind_direction(wind_direction)
-                        })
-                        logger.info(f"✅ Wind at {altitude}m: {wind_speed:.1f} m/s, {wind_direction:.0f}°")
+            # Перевіряємо кожну висоту Open-Meteo
+            for om_level, target_altitude in self.open_meteo_altitude_map.items():
+                speed_key = f'wind_speed_{om_level}'
+                dir_key = f'wind_direction_{om_level}'
+                
+                if speed_key in hourly and dir_key in hourly:
+                    if len(hourly[speed_key]) > hour_index and len(hourly[dir_key]) > hour_index:
+                        speed = hourly[speed_key][hour_index]
+                        direction = hourly[dir_key][hour_index]
+                        
+                        if speed is not None and direction is not None:
+                            wind_data.append({
+                                'altitude': target_altitude,
+                                'source_altitude': om_level,
+                                'speed': float(speed),
+                                'direction': float(direction),
+                                'source': 'Open-Meteo',
+                                'hour_index': hour_index
+                            })
+                            logger.info(f"✅ Extracted wind at {target_altitude}m: {speed:.1f} m/s, {direction:.0f}°")
+                        else:
+                            logger.warning(f"⚠️ Null data for {target_altitude}m")
                     else:
-                        logger.warning(f"⚠️ No data for {altitude}m ({level_name})")
+                        logger.warning(f"⚠️ Insufficient data for {target_altitude}m")
                 else:
-                    logger.warning(f"⚠️ Keys missing for {altitude}m: {speed_key}, {dir_key}")
+                    logger.warning(f"⚠️ Keys missing for {target_altitude}m: {speed_key}, {dir_key}")
+            
+            # Сортуємо за висотою
+            wind_data.sort(key=lambda x: x['altitude'])
             
             return wind_data
             
         except Exception as e:
-            logger.error(f"❌ Error extracting altitude wind data: {e}")
+            logger.error(f"❌ Error extracting altitude wind: {e}", exc_info=True)
+            return []
+    
+    def _estimate_altitude_wind_from_surface(self, weather_data: dict) -> List[Dict]:
+        """Оцінити вітер на висотах на основі земного вітру"""
+        try:
+            current = weather_data.get('current', {})
+            wind_speed_10m = current.get('wind_speed_10m', 0)
+            wind_dir_10m = current.get('wind_direction_10m', 0)
+            
+            if wind_speed_10m is None or wind_dir_10m is None:
+                logger.warning("⚠️ No surface wind data for estimation")
+                return []
+            
+            logger.info(f"🌬 Estimating from surface: {wind_speed_10m:.1f} m/s, {wind_dir_10m:.0f}°")
+            
+            wind_data = []
+            
+            # Метод логарифмічного профілю вітру для приземного шару атмосфери
+            # Формула: U(z) = U10 * ln(z/z0) / ln(10/z0)
+            # де z0 - параметр шорсткості (приймаємо 0.1 для відкритої місцевості)
+            z0 = 0.1  # параметр шорсткості (метри)
+            
+            for target_altitude in self.target_altitudes:
+                # Обчислюємо коефіцієнт посилення швидкості
+                if wind_speed_10m > 0:
+                    # Логарифмічний закон
+                    u_ratio = math.log(target_altitude / z0) / math.log(10 / z0)
+                    altitude_speed = wind_speed_10m * u_ratio
+                else:
+                    altitude_speed = 0
+                
+                # Невелика корекція напряму з висотою (експеріментально)
+                # На великих висотах вітер зазвичай повертає праворуч (ефект Коріоліса)
+                direction_change = (target_altitude / 1000) * 10  # до 10° на 1000м
+                altitude_direction = (wind_dir_10m + direction_change) % 360
+                
+                wind_data.append({
+                    'altitude': target_altitude,
+                    'speed': max(0, altitude_speed),  # переконуємось, що не від'ємне
+                    'direction': altitude_direction,
+                    'source': 'Estimation',
+                    'surface_speed': wind_speed_10m,
+                    'surface_direction': wind_dir_10m,
+                    'method': 'logarithmic_profile'
+                })
+            
+            return wind_data
+            
+        except Exception as e:
+            logger.error(f"❌ Error estimating altitude wind: {e}")
             return []
     
     def get_wind_direction(self, degrees: float) -> str:
@@ -287,12 +364,26 @@ class WeatherAPI:
                 message += altitude_section
             
             message += f"\n📡 *Джерело:* Open-Meteo API"
+            
+            # Вказуємо джерело даних про висотний вітер
+            wind_sources = []
+            for wind_data in weather_data.get('altitude_wind', []):
+                source = wind_data.get('source', '')
+                if source and source not in wind_sources:
+                    wind_sources.append(source)
+            
+            if wind_sources:
+                if 'Estimation' in wind_sources:
+                    message += " (висотний вітер - апроксимація)"
+                elif 'Open-Meteo' in wind_sources:
+                    message += " (висотний вітер - Open-Meteo)"
+            
             message += f"\n🔄 *Оновлено:* {datetime.now().strftime('%H:%M %d.%m.%Y')}"
             
             return message
             
         except Exception as e:
-            logger.error(f"Error formatting current weather: {e}")
+            logger.error(f"Error formatting current weather: {e}", exc_info=True)
             return None
     
     def format_3day_forecast(self, settlement_name: str, region: str, weather_data: dict) -> List[str]:
@@ -393,7 +484,7 @@ class WeatherAPI:
                 if hourly_section:
                     message += hourly_section
                 
-                # Додаємо вітер на висотах (однаковий для всіх днів, бо беремо поточні дані)
+                # Додаємо вітер на висотах (використовуємо поточні дані для всіх днів)
                 altitude_section = self._format_altitude_wind(weather_data.get('altitude_wind', []))
                 if altitude_section:
                     message += altitude_section
@@ -487,7 +578,6 @@ class WeatherAPI:
     def _format_altitude_wind(self, wind_data: List[Dict]) -> str:
         """Форматувати вітер на висотах"""
         if not wind_data:
-            # Якщо немає даних, повертаємо примітку
             return "\n💨 *Вітер на висотах:*\nДані тимчасово недоступні\n"
         
         message = "\n💨 *Вітер на висотах:*\n"
@@ -497,15 +587,29 @@ class WeatherAPI:
         
         for data in sorted_data:
             altitude = data['altitude']
-            level_name = data.get('level', '')
             speed = data['speed']
             direction = data['direction']
-            direction_text = data.get('direction_text', self.get_wind_direction(direction))
+            source = data.get('source', 'Unknown')
+            direction_text = self.get_wind_direction(direction)
             
-            message += f"• ~{altitude}м ({level_name}): {direction_text} "
-            message += f"({direction:.0f}°) {speed:.1f} м/с\n"
+            message += f"• ~{altitude}м: {direction_text} "
+            message += f"({direction:.0f}°) {speed:.1f} м/с"
+            
+            # Додаємо інформацію про джерело, якщо це апроксимація
+            if source == 'Estimation':
+                surface_speed = data.get('surface_speed', 0)
+                surface_dir = data.get('surface_direction', 0)
+                message += f" [апроксимація з {surface_speed:.1f} м/с на землі]"
+            
+            message += "\n"
         
-        message += "\nℹ️ *Примітка:* Дані з Open-Meteo API\n"
+        # Додаємо загальну примітку
+        sources = set(data.get('source', '') for data in sorted_data)
+        if 'Estimation' in sources:
+            message += "\nℹ️ *Примітка:* Висотний вітер апроксимовано на основі земного\n"
+            message += "за логарифмічним законом профілю вітру.\n"
+        elif 'Open-Meteo' in sources:
+            message += "\nℹ️ *Примітка:* Дані про висотний вітер з Open-Meteo API\n"
         
         return message
     
