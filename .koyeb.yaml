@@ -1,0 +1,17 @@
+name: ukraine-weather-bot
+services:
+  - name: weather-bot
+    type: worker
+    env:
+      - name: TELEGRAM_TOKEN
+        secret: true
+    ports:
+      - port: 3000
+        protocol: http
+    regions:
+      - fra
+    build:
+      builder: buildpacks
+    scaling:
+      min: 1
+      max: 1

@@ -1,79 +1,28 @@
-# app.py - Гарантовано працює
+# app.py - Версія для Koyeb
 import os
 import sys
-import time
-import subprocess
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import logging
 
-# Простий health check сервер
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'application/json')
-        self.end_headers()
-        if self.path == '/health':
-            self.wfile.write(b'{"status":"healthy"}')
-        else:
-            self.wfile.write(b'{"status":"online"}')
-    
-    def log_message(self, format, *args):
-        pass  # Вимкнути логування
+# Налаштування логування
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO,
+    stream=sys.stdout
+)
 
-def run_health_server():
-    """Запуск health сервера"""
-    port = int(os.getenv('PORT', 8000))
-    print(f"🌐 Health server starting on port {port}")
-    server = HTTPServer(('0.0.0.0', port), HealthHandler)
-    server.serve_forever()
+print("=" * 60)
+print("🇺🇦 UKRAINE WEATHER BOT - KOYEB VERSION")
+print("=" * 60)
 
-def run_bot():
-    """Запуск бота"""
-    print("=" * 60)
-    print("🇺🇦 UKRAINE WEATHER BOT")
-    print("=" * 60)
-    
-    # Монопатч для telegram бібліотеки
-    import asyncio
-    import signal
-    
-    # Вимикаємо обробку сигналів
-    if hasattr(signal, 'SIGINT'):
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
-    if hasattr(signal, 'SIGTERM'):
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    
-    # Імпортуємо патч перед імпортом telegram
-    import sys
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    
-    # Запускаємо бота через subprocess
-    while True:
-        try:
-            print("🚀 Starting bot...")
-            result = subprocess.run(
-                [sys.executable, 'bot.py'],
-                capture_output=True,
-                text=True
-            )
-            
-            print(result.stdout)
-            if result.stderr:
-                print("STDERR:", result.stderr)
-            
-            print("Bot stopped, restarting in 5 seconds...")
-            time.sleep(5)
-            
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            print(f"Bot error: {e}, restarting...")
-            time.sleep(5)
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+
+if not TELEGRAM_TOKEN:
+    print("❌ ERROR: TELEGRAM_TOKEN not found!")
+    sys.exit(1)
+
+print(f"✅ TELEGRAM_TOKEN: OK")
 
 if __name__ == '__main__':
-    # Запускаємо health сервер в потоці
-    health_thread = threading.Thread(target=run_health_server, daemon=True)
-    health_thread.start()
-    
-    # Запускаємо бота в головному потоці
-    run_bot()
+    # Запускаємо бота напряму
+    from bot import main
+    main()
