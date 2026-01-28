@@ -1,9 +1,9 @@
-# app.py - Виправлена версія для Koyeb
+# app.py - Flask + Telegram Bot разом
 from flask import Flask, jsonify
-import threading
 import os
 import logging
 import sys
+import threading
 import asyncio
 
 app = Flask(__name__)
@@ -21,88 +21,106 @@ def home():
     """Головна сторінка"""
     return jsonify({
         'status': 'online',
-        'service': 'Ukraine Weather Telegram Bot',
+        'service': 'weather-telegram-bot',
         'version': '1.0.0'
     })
 
 @app.route('/health')
 def health_check():
-    """Ендпоінт для перевірки здоров'я сервісу"""
+    """Health check для Koyeb"""
     return jsonify({'status': 'healthy'})
 
-async def run_telegram_bot_async():
-    """Асинхронна функція для запуску Telegram бота"""
+def start_bot_in_thread():
+    """Запуск Telegram бота в окремому потоці"""
     try:
-        logger.info("Starting Telegram bot on Koyeb...")
-        
-        # Перевірка токена
-        TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-        if not TELEGRAM_TOKEN:
-            logger.error("❌ TELEGRAM_TOKEN not found in environment variables!")
-            return
-        
-        logger.info("✅ TELEGRAM_TOKEN loaded successfully")
-        
         print("=" * 60)
-        print("🇺🇦 UKRAINE WEATHER BOT ON KOYEB")
+        print("🇺🇦 UKRAINE WEATHER BOT")
         print("=" * 60)
         
-        # Імпорт тут, щоб уникнути проблем з Flask
+        # Імпортуємо бібліотеки тут, щоб уникнути конфліктів
+        import asyncio
+        
+        # Створюємо новий event loop для цього потоку
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Імпортуємо основний код бота
+        from bot import main
+        
+        # Запускаємо бота в цьому event loop
+        loop.run_until_complete(main_async())
+        
+    except Exception as e:
+        logger.error(f"Error in bot thread: {e}")
+        import traceback
+        traceback.print_exc()
+
+async def main_async():
+    """Асинхронна версія main з bot.py"""
+    # Копіюємо код з bot.py main(), але з async
+    TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+    
+    if not TELEGRAM_TOKEN:
+        print("❌ ERROR: TELEGRAM_TOKEN not found!")
+        return
+    
+    print(f"✅ TELEGRAM_TOKEN: OK")
+    print("✅ OPEN-METEO: FREE TIER (no API key needed)")
+    print("=" * 60)
+    
+    try:
         from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler
-        
-        # Імпорт власних модулів
-        from settlements_db import settlements_db
-        from weather_api import weather_api
-        
-        # Імпорт обробників з bot.py
-        from bot import start_command, help_command, handle_message, button_handler, handle_menu_button
-        
-        # Створення додатку
+        print("✅ Libraries imported successfully")
+    except ImportError as e:
+        print(f"❌ Import error: {e}")
+        return
+    
+    from settlements_db import settlements_db
+    from weather_api import weather_api
+    
+    print(f"✅ Database loaded: {len(settlements_db.settlements)} settlements")
+    print("✅ Open-Meteo API: Ready")
+    print("🚀 Starting bot polling...")
+    
+    try:
         application = Application.builder().token(TELEGRAM_TOKEN).build()
         
-        # Додавання обробників
+        # Імпортуємо обробники з bot.py
+        from bot import start_command, help_command, handle_message, button_handler, handle_menu_button
+        
+        # Додаємо обробники
         application.add_handler(CommandHandler("start", start_command))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^(🌤|📅|🔍|🏙|⭐️|📊|❓|↩️)'), handle_menu_button))
         application.add_handler(CallbackQueryHandler(button_handler))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
-        print(f"✅ Database loaded: {len(settlements_db.settlements)} settlements")
-        print("✅ Open-Meteo API: Ready")
-        print("🚀 Starting bot polling on Koyeb...")
+        # Додаємо обробник помилок
+        from bot import error_handler
+        application.add_error_handler(error_handler)
         
-        # Запуск бота
+        # Запускаємо бота
         await application.run_polling(
             drop_pending_updates=True,
+            timeout=30,
+            pool_timeout=30,
             allowed_updates=None
         )
         
     except Exception as e:
-        logger.error(f"❌ Error in Telegram bot: {e}")
-        import traceback
-        traceback.print_exc()
-
-def run_telegram_bot():
-    """Запуск Telegram бота в окремому потоці з event loop"""
-    try:
-        # Створюємо новий event loop для потоку
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        # Запускаємо асинхронну функцію
-        loop.run_until_complete(run_telegram_bot_async())
-        
-    except Exception as e:
-        logger.error(f"❌ Error in bot thread: {e}")
+        print(f"❌ Application error: {e}")
+        raise
 
 if __name__ == '__main__':
-    # Запускаємо Telegram бота в окремому потоці
-    logger.info("🔄 Starting Telegram bot thread...")
-    bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)
+    # Запускаємо бота в окремому потоці
+    logger.info("🔄 Starting Telegram bot in separate thread...")
+    bot_thread = threading.Thread(target=start_bot_in_thread, daemon=True)
     bot_thread.start()
     
-    # Запускаємо Flask веб-сервер
+    # Запускаємо Flask сервер
     port = int(os.getenv('PORT', 8000))
     host = os.getenv('HOST', '0.0.0.0')
     logger.info(f"🌐 Starting Flask server on {host}:{port}")
+    
+    # Важливо: use_reloader=False для уникнення подвійного запуску
     app.run(host=host, port=port, debug=False, use_reloader=False)
