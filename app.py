@@ -1,9 +1,10 @@
-# app.py - Головний файл для Koyeb (Flask + Telegram Bot)
+# app.py - Виправлена версія для Koyeb
 from flask import Flask, jsonify
 import threading
 import os
 import logging
 import sys
+import asyncio
 
 app = Flask(__name__)
 
@@ -29,13 +30,8 @@ def health_check():
     """Ендпоінт для перевірки здоров'я сервісу"""
     return jsonify({'status': 'healthy'})
 
-def get_current_timestamp():
-    """Отримати поточну мітку часу"""
-    from datetime import datetime
-    return datetime.now().isoformat()
-
-def run_telegram_bot():
-    """Запуск Telegram бота"""
+async def run_telegram_bot_async():
+    """Асинхронна функція для запуску Telegram бота"""
     try:
         logger.info("Starting Telegram bot on Koyeb...")
         
@@ -47,26 +43,22 @@ def run_telegram_bot():
         
         logger.info("✅ TELEGRAM_TOKEN loaded successfully")
         
-        # Імпорт тут, щоб уникнути проблем з Flask
         print("=" * 60)
         print("🇺🇦 UKRAINE WEATHER BOT ON KOYEB")
         print("=" * 60)
         
-        # Імпорт необхідних бібліотек
+        # Імпорт тут, щоб уникнути проблем з Flask
         from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler
-        import asyncio
         
         # Імпорт власних модулів
         from settlements_db import settlements_db
         from weather_api import weather_api
         
+        # Імпорт обробників з bot.py
+        from bot import start_command, help_command, handle_message, button_handler, handle_menu_button
+        
         # Створення додатку
         application = Application.builder().token(TELEGRAM_TOKEN).build()
-        
-        # Тут потрібно додати всі обробники з вашого bot.py
-        # Наприклад:
-        from bot import start_command, help_command, handle_message, button_handler, handle_menu_button
-        from bot import get_main_keyboard
         
         # Додавання обробників
         application.add_handler(CommandHandler("start", start_command))
@@ -80,7 +72,7 @@ def run_telegram_bot():
         print("🚀 Starting bot polling on Koyeb...")
         
         # Запуск бота
-        application.run_polling(
+        await application.run_polling(
             drop_pending_updates=True,
             allowed_updates=None
         )
@@ -89,6 +81,19 @@ def run_telegram_bot():
         logger.error(f"❌ Error in Telegram bot: {e}")
         import traceback
         traceback.print_exc()
+
+def run_telegram_bot():
+    """Запуск Telegram бота в окремому потоці з event loop"""
+    try:
+        # Створюємо новий event loop для потоку
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Запускаємо асинхронну функцію
+        loop.run_until_complete(run_telegram_bot_async())
+        
+    except Exception as e:
+        logger.error(f"❌ Error in bot thread: {e}")
 
 if __name__ == '__main__':
     # Запускаємо Telegram бота в окремому потоці
